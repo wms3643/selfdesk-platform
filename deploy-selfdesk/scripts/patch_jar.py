@@ -29,7 +29,9 @@ ADMIN_INDEX = PREFIX + "admin/index.html"
 BRAND_JS = PREFIX + "selfdesk-brand.js"
 DASH_JS = PREFIX + "selfdesk-admin-dash.js"
 
+TPL = "BOOT-INF/classes/templates/"
 SYNC = {
+    TPL + "ftl/default.ftl": ROOT / "home" / "default.ftl",
     PREFIX + "console/index.html": ROOT / "console" / "index.html",
     PREFIX + "console/styles.css": ROOT / "console" / "styles.css",
 }

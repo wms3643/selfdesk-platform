@@ -111,10 +111,12 @@ cp .env.example .env        # 填 DEEPSEEK_API_KEY；留空也能启动，只是
 docker compose up -d --build
 ```
 
-首次构建会编译 24 个模块，约 10 分钟（之后有缓存）。启动后：
+首次构建会编译 24 个模块，约 10 分钟（之后有缓存）。启动后打开 **http://localhost:9003/**，
+这是一个落地页，三个主入口都在上面（访客端 / 客服工作台 / 管理后台）：
 
 | 入口 | 地址 | 是否需要登录 |
 |---|---|---|
+| **首页（从这进）** | http://localhost:9003/ | 不需要 |
 | 访客端 | http://localhost:9003/chat/ | 不需要 |
 | 客服工作台 | http://localhost:9003/console/ | 不需要（本机免密） |
 | 管理后台 | http://localhost:9003/admin | 不需要，打开即进入 |

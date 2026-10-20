@@ -78,6 +78,8 @@ a:hover{color:var(--sd-brand-2)}
 .ant-pro-form-login-container{background:transparent!important}
 .ant-pro-form-login-title{font-size:26px!important;font-weight:500!important;letter-spacing:-.02em!important}
 .ant-pro-form-login-desc{color:var(--sd-ink-3)!important}
+/* 手机号/扫码登录依赖短信与微信配置，演示环境没有，先隐藏 */
+.ant-pro-form-login-container .ant-tabs-tab+.ant-tabs-tab{display:none!important}
 /* 访客端聊天页（/chat）：自带一套 Btn/Input/Composer 类，单独覆盖 */
 body.S--wide .chat-page{background:var(--sd-page)!important}
 body.S--wide .chat-navbar{background:var(--sd-surface)!important;border-bottom:1px solid var(--sd-line)!important}

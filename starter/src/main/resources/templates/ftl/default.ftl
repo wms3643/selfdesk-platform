@@ -1,312 +1,157 @@
 <!DOCTYPE html>
-<html lang="${lang! 'zh-CN'}">
+<html lang="zh-CN">
 <head>
-    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <#include "./common/macro/i18n.ftl" />
-    <#assign currentLang = 'zh-cn'>
-    <#if lang??>
-        <#assign _lc = lang?lower_case>
-        <#if _lc?index_of('zh-tw') == 0>
-            <#assign currentLang = 'zh-tw'>
-        <#elseif _lc?index_of('en') == 0>
-            <#assign currentLang = 'en'>
-        </#if>
-    </#if>
-    <#assign currentLangLabel = '简体中文'>
-    <#if currentLang == 'zh-tw'>
-        <#assign currentLangLabel = '繁體中文'>
-    <#elseif currentLang == 'en'>
-        <#assign currentLangLabel = 'English'>
-    </#if>
-    <title><@t key="default.title">系统入口</@t></title>
-    <#--  <title>${(customName?exists && customName != '')?then(customName?html, '系统入口')}</title>  -->
-    <#if customLogo?exists && customLogo != ''>
-    <link rel="icon" href="${customLogo}" type="image/x-icon">
-    <link rel="shortcut icon" href="${customLogo}" type="image/x-icon">
-    </#if>
+    <title>SelfDesk 智能客服平台</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230E7A68'/%3E%3Cpath d='M10 12h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-6l-4 3v-3h-2a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z' fill='%23fff'/%3E%3C/svg%3E">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Helvetica Neue', Arial, sans-serif;
+        :root {
+            --bg: #F1F4F3;
+            --panel: #ffffff;
+            --ink: #0E1513;
+            --ink-2: #48524E;
+            --ink-3: #7C8781;
+            --line: #E3E8E6;
+            --primary: #0E7A68;
+            --primary-soft: #E7F3F0;
         }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             min-height: 100vh;
+            background:
+                radial-gradient(circle at 12% 8%, rgba(14,122,104,.07), transparent 34%),
+                radial-gradient(circle at 88% 92%, rgba(109,90,230,.05), transparent 30%),
+                var(--bg);
+            color: var(--ink);
+            font-family: "Inter", "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            -webkit-font-smoothing: antialiased;
             display: flex;
             justify-content: center;
-            align-items: center;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 56px 24px 40px;
         }
-        
-        .container {
-            position: relative;
-            max-width: 800px;
-            width: 90%;
-            padding: 40px;
-            background-color: #ffffff;
-            border-radius: 10px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-            text-align: center;
+        .wrap { width: 100%; max-width: 960px; }
+        header { display: flex; align-items: center; gap: 14px; margin-bottom: 40px; }
+        .mark {
+            width: 44px; height: 44px; border-radius: 13px; background: var(--primary);
+            display: grid; place-items: center; box-shadow: 0 10px 24px -14px rgba(14,122,104,.9);
         }
-
-        .lang-switch {
-            position: absolute;
-            top: 24px;
-            right: 24px;
+        .brand { font-size: 21px; font-weight: 600; letter-spacing: -.01em; }
+        .tag { color: var(--ink-3); font-size: 13px; margin-top: 3px; }
+        h1 { font-size: 34px; font-weight: 600; letter-spacing: -.025em; line-height: 1.25; }
+        .lede { margin-top: 14px; color: var(--ink-2); font-size: 15px; line-height: 1.7; max-width: 660px; }
+        .lede b { color: var(--ink); font-weight: 600; }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 34px; }
+        a.card {
+            display: block; text-decoration: none; color: inherit;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+            padding: 22px 20px 20px; transition: .16s ease;
+            box-shadow: 0 18px 40px -34px rgba(14,21,19,.5);
         }
-
-        .lang-switch details {
-            position: relative;
+        a.card:hover { border-color: #C9D8D3; transform: translateY(-2px); box-shadow: 0 22px 44px -30px rgba(14,21,19,.45); }
+        .ico {
+            width: 34px; height: 34px; border-radius: 10px; background: var(--primary-soft);
+            display: grid; place-items: center; margin-bottom: 14px;
         }
-
-        .lang-switch summary {
-            list-style: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            min-width: 120px;
-            padding: 10px 14px;
-            border: 1px solid #d9e2ec;
-            border-radius: 999px;
-            background: #f8fbff;
-            color: #234;
-            cursor: pointer;
-            font-size: 0.95em;
-            box-shadow: 0 8px 20px rgba(17, 38, 146, 0.08);
+        .card h3 { font-size: 15px; font-weight: 600; }
+        .card p { margin-top: 6px; font-size: 12.5px; color: var(--ink-3); line-height: 1.6; }
+        .card .go { margin-top: 14px; font-size: 12px; color: var(--primary); font-weight: 500; }
+        .sub { margin-top: 30px; }
+        .sub-title { font-size: 12px; color: var(--ink-3); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 12px; }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+        .chips a {
+            text-decoration: none; color: var(--ink-2); font-size: 12.5px;
+            background: #FAFBFB; border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
         }
-
-        .lang-switch summary::-webkit-details-marker {
-            display: none;
-        }
-
-        .lang-switch summary::after {
-            content: '';
-            width: 8px;
-            height: 8px;
-            border-right: 2px solid #5b6b7d;
-            border-bottom: 2px solid #5b6b7d;
-            transform: rotate(45deg) translateY(-1px);
-            transition: transform 0.2s ease;
-        }
-
-        .lang-switch details[open] summary::after {
-            transform: rotate(225deg) translateY(-1px);
-        }
-
-        .lang-menu {
-            position: absolute;
-            top: calc(100% + 10px);
-            right: 0;
-            min-width: 160px;
-            padding: 8px;
-            border: 1px solid #d9e2ec;
-            border-radius: 14px;
-            background: #ffffff;
-            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
-        }
-
-        .lang-option {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            width: 100%;
-            padding: 10px 12px;
-            border: 0;
-            border-radius: 10px;
-            background: transparent;
-            color: #243447;
-            cursor: pointer;
-            font-size: 0.95em;
-            text-align: left;
-        }
-
-        .lang-option:hover,
-        .lang-option.is-active {
-            background: #eef6ff;
-            color: #0f5fbf;
-        }
-
-        .lang-option-check {
-            font-size: 0.9em;
-            opacity: 0.85;
-        }
-        
-        h1 {
-            color: #333;
-            font-size: 2.5em;
-            margin-bottom: 20px;
-        }
-        
-        .logo {
-            width: 120px;
-            margin-bottom: 30px;
-        }
-        
-        .description {
-            color: #666;
-            margin-bottom: 40px;
-            line-height: 1.6;
-        }
-        
-        .button-container {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 20px;
-        }
-        
-        .button {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            text-decoration: none;
-            padding: 20px 30px;
-            background-color: #fff;
-            color: #333;
-            border-radius: 8px;
-            border: 1px solid #eaeaea;
-            transition: all 0.3s ease;
-            min-width: 200px;
-        }
-        
-        .button:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
-            border-color: #3498db;
-        }
-        
-        .button i {
-            font-size: 2.5em;
-            margin-bottom: 15px;
-            color: #3498db;
-        }
-        
-        .button-title {
-            font-size: 1.2em;
-            font-weight: bold;
-            margin-bottom: 8px;
-        }
-        
-        .button-description {
-            font-size: 0.9em;
-            color: #777;
-        }
-        
+        .chips a:hover { color: var(--primary); border-color: #CFE6E0; background: var(--primary-soft); }
         footer {
-            margin-top: 60px;
-            color: #888;
-            font-size: 0.9em;
+            margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line);
+            display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+            font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em;
         }
-        
-        @media (max-width: 600px) {
-            .container {
-                padding: 30px 20px;
-            }
-
-            .lang-switch {
-                top: 16px;
-                right: 16px;
-            }
-
-            .lang-switch summary {
-                min-width: 108px;
-                padding: 8px 12px;
-                font-size: 0.9em;
-            }
-            
-            h1 {
-                font-size: 2em;
-            }
-            
-            .button {
-                width: 100%;
-            }
+        .hint { margin-top: 18px; font-size: 12px; color: var(--ink-3); }
+        @media (max-width: 760px) {
+            body { padding: 32px 18px; }
+            h1 { font-size: 26px; }
+            .grid { grid-template-columns: 1fr; }
         }
     </style>
-    <!-- 添加Font Awesome图标支持 -->
-    <link href="/assets/vendor/bootstrap5/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
-    <div class="container">
-        <div class="lang-switch">
-            <details>
-                <summary>${currentLangLabel}</summary>
-                <div class="lang-menu">
-                    <button class="lang-option ${(currentLang == 'zh-cn')?string('is-active', '')}" type="button" data-lang="zh-CN">
-                        <span>简体中文</span>
-                        <span class="lang-option-check">${(currentLang == 'zh-cn')?string('✓', '')}</span>
-                    </button>
-                    <button class="lang-option ${(currentLang == 'zh-tw')?string('is-active', '')}" type="button" data-lang="zh-TW">
-                        <span>繁體中文</span>
-                        <span class="lang-option-check">${(currentLang == 'zh-tw')?string('✓', '')}</span>
-                    </button>
-                    <button class="lang-option ${(currentLang == 'en')?string('is-active', '')}" type="button" data-lang="en">
-                        <span>English</span>
-                        <span class="lang-option-check">${(currentLang == 'en')?string('✓', '')}</span>
-                    </button>
-                </div>
-            </details>
+<div class="wrap">
+    <header>
+        <div class="mark">
+            <svg width="23" height="23" viewBox="0 0 32 32" fill="none">
+                <path d="M9 11h14a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 23 23h-6.2l-4.6 3.4V23H9a2.5 2.5 0 0 1-2.5-2.5v-7A2.5 2.5 0 0 1 9 11z" fill="#fff"/>
+            </svg>
         </div>
-        <#--  <#if customLogo?exists && customLogo != ''>
-        <img src="${customLogo}" alt="${(customName?exists && customName != '')?then(customName?html, '系统入口')}" class="logo">
-        </#if>  -->
-    <#--  <h1>${(customName?exists && customName != '')?then(customName?html, '系统入口')}</h1>  -->
-    <h1><@t key="default.title">系统入口</@t></h1>
-    <#--  <p class="description">${(customDescription?exists && customDescription != '')?then(customDescription?html, '请选择您要进入的系统入口')}</p>  -->
-    <p class="description"><@t key="default.select">请选择您要进入的系统入口</@t></p>
-        
-        <div class="button-container">
-            <a href="/admin" target="_blank" class="button">
-                <i class="fas fa-cogs"></i>
-                <div class="button-title"><@t key="default.admin.title">管理后台</@t></div>
-                <div class="button-description"><@t key="default.admin.desc">系统配置与管理</@t></div>
-            </a>
-            <a href="/agent/chat" target="_blank" class="button">
-                <i class="fas fa-headset"></i>
-                <div class="button-title"><@t key="default.agent.title">客服工作台</@t></div>
-                <div class="button-description"><@t key="default.agent.desc">客户服务与沟通</@t></div>
-            </a>
-            <a href="/notebase" target="_blank" class="button">
-                <i class="fas fa-book"></i>
-                <div class="button-title"><@t key="default.kbase.title">企业知识库</@t></div>
-                <div class="button-description"><@t key="default.kbase.desc">知识库与文档管理</@t></div>
-            </a>
-            <a href="/workflow" target="_blank" class="button">
-                <i class="fas fa-diagram-project"></i>
-                <div class="button-title"><@t key="default.workflow.title">工作流</@t></div>
-                <div class="button-description"><@t key="default.workflow.desc">流程编排与自动化</@t></div>
-            </a>
-            <#if callFreeswitchEnabled?? && callFreeswitchEnabled>
-            <a href="/ippbx" target="_blank" class="button">
-                <i class="fas fa-phone-volume"></i>
-                <div class="button-title"><@t key="default.callcenter.title">呼叫中心</@t></div>
-                <div class="button-description"><@t key="default.callcenter.desc">智能外呼与质检</@t></div>
-            </a>
-            </#if>
+        <div>
+            <div class="brand">SelfDesk</div>
+            <div class="tag">企业级智能客服平台</div>
         </div>
-        
-        <footer>
-            <p>© 2013~2026 <@t key="default.copyright">版权所有</@t></p>
-        </footer>
+    </header>
+
+    <h1>多渠道接入、坐席协同、知识库问答</h1>
+    <p class="lede">
+        面向在线客服场景的完整系统：<b>访客会话</b>、<b>坐席工作台</b>、<b>知识库 RAG</b>、<b>工单与 CRM</b>、<b>运营分析</b>。<br>AI 侧有两套可切换实现：Spring AI 直连，或 Python + LangGraph 编排（意图分流、工具调用、转人工挂起恢复）。
+    </p>
+
+    <div class="grid">
+        <a class="card" href="/chat/">
+            <div class="ico">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0E7A68" stroke-width="1.8" stroke-linecap="round">
+                    <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.3-.6L3 21l1.7-5a8.4 8.4 0 0 1 8.3-12.9 8.4 8.4 0 0 1 8 8.4z"/>
+                </svg>
+            </div>
+            <h3>访客端</h3>
+            <p>模拟用户在网页里发起咨询，由 AI 先回答，答不了转人工。</p>
+            <div class="go">打开 /chat/ →</div>
+        </a>
+
+        <a class="card" href="/console/">
+            <div class="ico">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0E7A68" stroke-width="1.8" stroke-linecap="round">
+                    <rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/>
+                </svg>
+            </div>
+            <h3>客服工作台</h3>
+            <p>坐席侧：会话列表、接管、回复、结束，以及实时运营看板。</p>
+            <div class="go">打开 /console/ →</div>
+        </a>
+
+        <a class="card" href="/admin">
+            <div class="ico">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0E7A68" stroke-width="1.8" stroke-linecap="round">
+                    <rect x="3" y="3" width="7" height="7" rx="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.6"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.6"/>
+                </svg>
+            </div>
+            <h3>管理后台</h3>
+            <p>组织与成员、角色权限、机器人配置、模型与渠道管理。</p>
+            <div class="go">打开 /admin →</div>
+        </a>
     </div>
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const options = document.querySelectorAll('.lang-option');
 
-            options.forEach(function(option) {
-                option.addEventListener('click', function() {
-                    const targetLang = option.getAttribute('data-lang');
-                    const url = new URL(window.location.href);
+    <div class="sub">
+        <div class="sub-title">更多模块</div>
+        <div class="chips">
+            <a href="/kbase/">知识库</a>
+            <a href="/ticket/">工单</a>
+            <a href="/workflow/">工作流</a>
+            <a href="/kanban/">看板</a>
+            <a href="/voc/">客户之声</a>
+            <a href="/meet/">会议</a>
+            <a href="/office/">办公</a>
+            <a href="/webrtc/">音视频</a>
+        </div>
+    </div>
 
-                    url.searchParams.set('lang', targetLang);
-                    window.location.href = url.toString();
-                });
-            });
-        });
-    </script>
+    <p class="hint">演示环境已开启本机免密：打开管理后台会直接进入，不需要输入账号密码。</p>
+
+    <footer>
+        <span>JAVA 21 · SPRING BOOT · SPRING AI · LANGGRAPH · POSTGRESQL · ELASTICSEARCH</span>
+        <span>AGPL-3.0</span>
+    </footer>
+</div>
 </body>
 </html>
