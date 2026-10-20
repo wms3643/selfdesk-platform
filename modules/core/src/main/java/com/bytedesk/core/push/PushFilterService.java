@@ -1,0 +1,68 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-11-05 11:03:50
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-19 10:06:46
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.push;
+
+
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.RedisConsts;
+
+import java.time.Duration;
+import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
+
+@RequiredArgsConstructor
+@Slf4j
+@Service
+public class PushFilterService {
+    
+    // 验证码发送间隔阈值（单位：秒）
+    private static final long VALIDATE_CODE_SEND_INTERVAL_SECONDS = 10 * 60; // 10分钟
+
+    private final StringRedisTemplate stringRedisTemplate;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    // 检查是否可以发送验证码
+    public Boolean canSendCode(String ip) {
+        Boolean debugEnabled = bytedeskProperties.getDebug();
+        if (Boolean.TRUE.equals(debugEnabled)) {
+            log.info("PushFilterService bypass rate limit because bytedesk.debug=true, ip={}", ip);
+            return true;
+        }
+        String key = RedisConsts.PUSH_CODE_IP_PREFIX + ip;
+        Boolean exists = stringRedisTemplate.hasKey(key);
+        log.info("PushFilterService rate limit check, debug={}, ip={}, redisKey={}, exists={}",
+                debugEnabled,
+                ip,
+                key,
+                exists);
+        return exists == null || !exists;
+    }
+
+    // 更新IP最后发送验证码的时间
+    public void updateIpLastSentTime(String ip) {
+        String key = RedisConsts.PUSH_CODE_IP_PREFIX + ip;
+        stringRedisTemplate.opsForValue().set(key, "1", Duration.ofSeconds(VALIDATE_CODE_SEND_INTERVAL_SECONDS));
+    }
+
+    // 删除发送验证码的ip
+    public void removeIpLastSentTime(String ip) {
+        String key = RedisConsts.PUSH_CODE_IP_PREFIX + ip;
+        stringRedisTemplate.delete(key);
+    }
+
+}

@@ -1,0 +1,495 @@
+declare interface Animation_2 {
+    enabled?: boolean;
+    duration?: number;
+    type?: 'ease' | 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+}
+
+declare interface BrowseConfig {
+    referer?: string;
+    referrer?: string;
+    url?: string;
+    title?: string;
+    [key: string]: string | number | undefined;
+}
+
+declare interface BubbleConfig {
+    show?: boolean;
+    icon?: string;
+    title?: string;
+    subtitle?: string;
+    messages?: BubbleMessageItem[];
+    autoRotate?: boolean;
+    rotateInterval?: number;
+    switchMode?: BubbleSwitchMode;
+}
+
+declare interface BubbleMessageItem {
+    icon?: string;
+    title?: string;
+    subtitle?: string;
+}
+
+declare type BubbleSwitchMode = 'fade' | 'slide-up' | 'ticker';
+
+declare interface ButtonConfig {
+    show?: boolean;
+    icon?: string;
+    text?: string;
+    width?: number;
+    height?: number;
+    action?: 'chat' | 'thread' | 'webrtc' | 'call' | 'ticket';
+    previewImageUrl?: string;
+    previewImageAlt?: string;
+    onClick?: () => void;
+}
+
+export declare interface BytedeskConfig {
+    isDebug?: boolean;
+    forceRefresh?: boolean;
+    apiUrl?: string;
+    htmlUrl?: string;
+    embedUrl?: string;
+    chatPath?: string;
+    threadPath?: string;
+    webrtcPath?: string;
+    callPath?: string;
+    ticketPath?: string;
+    placement?: 'bottom-left' | 'bottom-right';
+    marginBottom?: number;
+    marginSide?: number;
+    autoPopup?: boolean;
+    autoPopupDelay?: number;
+    draggable?: boolean;
+    locale?: string;
+    inviteConfig?: InviteConfig;
+    tabsConfig?: TabsConfig;
+    bubbleConfig?: BubbleConfig;
+    buttonConfig?: ButtonConfig;
+    buttonsConfig?: ButtonConfig[];
+    feedbackConfig?: FeedbackConfig;
+    chatConfig?: ChatConfig;
+    browseConfig?: BrowseConfig;
+    animation?: Animation_2;
+    window?: WindowConfig;
+    minimizedBarConfig?: MinimizedBarConfig;
+    theme?: Theme;
+    onInit?: () => void;
+    onShowChat?: () => void;
+    onHideChat?: () => void;
+    onMessage?: (message: string, type: string) => void;
+    onMessageBubbleClick?: (event: MessageBubbleClickEvent) => void;
+    onConfigChange?: (config: BytedeskConfig) => void;
+    onVisitorInfo?: (uid: string, visitorUid: string) => void;
+}
+
+declare class BytedeskWeb {
+    private config;
+    private unreadBadgeMode;
+    private unreadBadgeCount;
+    private bubble;
+    private bubbleContainer;
+    private minimizedBar;
+    private buttonElements;
+    private buttonPreviewElement;
+    private buttonPreviewHideTimer;
+    private window;
+    private embedNavBar;
+    private isEmbedMode;
+    private embedCurrentUrl;
+    private inviteDialog;
+    private contextMenu;
+    private hideTimeout;
+    private isVisible;
+    private isDragging;
+    private isMinimizedBarDragging;
+    private dragDidMove;
+    private windowState;
+    private loopCount;
+    private loopTimer;
+    private isDestroyed;
+    private isWindowDragging;
+    private windowDragState;
+    private initVisitorPromise;
+    private getUnreadMessageCountPromise;
+    private clearUnreadMessagesPromise;
+    private feedbackTooltip;
+    private feedbackDialog;
+    private selectedText;
+    private selectionDebounceTimer;
+    private isTooltipVisible;
+    private lastSelectionText;
+    private lastMouseEvent;
+    private lastSelectionRect;
+    private bubbleMessages;
+    private bubbleMessageIndex;
+    private bubbleMessageTimer;
+    private bubbleMessageTransitionTimer;
+    private bubbleMessageViewportElement;
+    private bubbleMessageContentElement;
+    private bubblePendingMessageElement;
+    private bubbleTickerTrackElement;
+    private bubbleTickerStyleElement;
+    private bubbleIconElement;
+    private bubbleTitleElement;
+    private bubbleSubtitleElement;
+    constructor(config: BytedeskConfig);
+    private setupApiUrl;
+    private mergeConfig;
+    private refreshFloatingUi;
+    private getMinimizedBarLabel;
+    private createMinimizedBarIcon;
+    private createMinimizedBarLabelElement;
+    private hideDefaultFloatingUi;
+    private restoreDefaultFloatingUi;
+    private removeMinimizedBar;
+    private showMinimizedBar;
+    private restoreMinimizedWindow;
+    private updateChatWindowLayout;
+    private refreshChatIframeUrl;
+    setTheme(themeConfig: Partial<NonNullable<BytedeskConfig["theme"]>>): void;
+    setConfig(nextConfig: Partial<BytedeskConfig>, options?: SetConfigOptions): void;
+    private getPrimaryActionFromConfig;
+    private syncChatPathByAction;
+    private getDefaultConfig;
+    private getDefaultTabsConfig;
+    private getEffectiveButtonConfigs;
+    private hasVisibleButtons;
+    private isMultiButtonLayout;
+    private applyConfiguredButtonVisibility;
+    private hideBubbleMessageElement;
+    private triggerButtonAction;
+    private hideButtonPreview;
+    private cancelButtonPreviewHide;
+    private scheduleHideButtonPreview;
+    private showButtonPreview;
+    private createButtonElement;
+    init(): Promise<void>;
+    _initVisitor(): Promise<any>;
+    private _browseVisitor;
+    private getBrowserInfo;
+    private getOSInfo;
+    private getDeviceInfo;
+    _getUnreadMessageCount(): Promise<any>;
+    getUnreadMessageCount(): Promise<any>;
+    initVisitor(): Promise<any>;
+    browseVisitor(): Promise<void>;
+    clearBrowseFailedLimit(): void;
+    clearVisitorInfo(): void;
+    forceInitVisitor(): Promise<any>;
+    private removeUnreadBadgeElement;
+    private renderUnreadBadge;
+    setUnreadMessageCount(count: number): number;
+    showUnreadDot(): void;
+    clearUnreadBadge(): void;
+    clearUnreadMessages(): Promise<any>;
+    private getBubbleMessages;
+    private getBubbleSwitchMode;
+    private buildBubbleMessageContentNode;
+    private buildBubbleTickerItemNode;
+    private destroyBubbleTicker;
+    private setBubbleTickerRunning;
+    private initBubbleTicker;
+    private renderBubbleMessage;
+    private syncBubbleViewportHeight;
+    private cleanupPendingBubbleMessage;
+    private stopBubbleMessageTransition;
+    private transitionBubbleMessage;
+    private stopBubbleMessageRotation;
+    private startBubbleMessageRotation;
+    private createBubble;
+    private createChatWindow;
+    private createEmbedNavBar;
+    private createEmbedNavButton;
+    private updateEmbedUrlDisplay;
+    private showEmbedNavBar;
+    /**
+     * 确保嵌入导航栏存在并适配窗口布局。
+     * - 新窗口：createChatWindow 已创建，直接复用
+     * - 旧窗口（无导航栏）：动态注入导航栏并调整布局
+     */
+    private ensureEmbedNavBar;
+    private hideEmbedNavBar;
+    private getEnabledEmbeddedTabs;
+    private getDefaultEmbeddedTab;
+    private generateChatUrl;
+    private normalizePath;
+    private getChatPageBaseUrl;
+    private getChatPathByTab;
+    private setupMessageListener;
+    private handleLocalStorageData;
+    sendMessageToIframe(message: any): void;
+    resetAnonymousVisitor(): void;
+    showChat(config?: Partial<BytedeskConfig>): void;
+    hideChat(options?: {
+        preserveFloatingUiHidden?: boolean;
+    }): void;
+    showThread(config?: Partial<BytedeskConfig>): void;
+    showWebrtc(config?: Partial<BytedeskConfig>): void;
+    showCall(config?: Partial<BytedeskConfig>): void;
+    showTicket(config?: Partial<BytedeskConfig>): void;
+    /**
+     * 嵌入式显示外部网页（如帮助文档、产品页面等）
+     * @param url - 要嵌入显示的外部网页完整 URL
+     * @param title - 导航栏自定义标题，未传时兜底显示网址
+     */
+    showEmbed(url: string, title?: string): void;
+    private minimizeWindow;
+    private toggleMaximize;
+    private handleWindowDragStart;
+    private handleWindowDragMove;
+    private handleWindowDragEnd;
+    private setupResizeListener;
+    destroy(): void;
+    private createInviteDialog;
+    showInviteDialog(): void;
+    hideInviteDialog(): void;
+    handleInviteLoop(): void;
+    showButton(): void;
+    hideButton(): void;
+    showBubble(): void;
+    hideBubble(): void;
+    private createContextMenu;
+    private showContextMenu;
+    private hideContextMenu;
+    private togglePlacement;
+    /**
+     * 初始化文档反馈功能
+     */
+    private initFeedbackFeature;
+    /**
+     * 设置文本选择监听器
+     */
+    private setupTextSelectionListener;
+    /**
+     * 带防抖的文本选择处理
+     */
+    private handleTextSelectionWithDebounce;
+    /**
+     * 处理文本选择
+     */
+    private handleTextSelection;
+    /**
+     * 创建反馈提示框（含"问AI"和"文档反馈"两个按钮）
+     */
+    private createFeedbackTooltip;
+    /**
+     * 显示反馈提示框
+     */
+    private showFeedbackTooltip;
+    /**
+     * 隐藏反馈提示框
+     */
+    private hideFeedbackTooltip;
+    /**
+     * 创建反馈对话框
+     */
+    private createFeedbackDialog;
+    /**
+     * 显示反馈对话框
+     */
+    private showFeedbackDialog;
+    /**
+     * 隐藏反馈对话框
+     */
+    private hideFeedbackDialog;
+    /**
+     * 生成页面截图并上传到服务器
+     * @returns 返回上传后的截图URL，如果失败则返回null
+     */
+    private generateAndUploadScreenshot;
+    /**
+     * 生成截图预览（不上传到服务器）
+     */
+    private generateScreenshotPreview;
+    /**
+     * 计算选中文本附近的截图区域
+     */
+    private calculateScreenshotArea;
+    /**
+     * 动态加载 html2canvas
+     */
+    private loadHtml2Canvas;
+    /**
+     * 从CDN加载html2canvas
+     */
+    private loadHtml2CanvasFromCDN;
+    /**
+     * 提交反馈
+     */
+    private submitFeedback;
+    /**
+     * 提交反馈到服务器
+     */
+    private submitFeedbackToServer;
+    /**
+     * 显示反馈成功消息
+     */
+    private showFeedbackSuccess;
+    /**
+     * 公共方法：显示反馈对话框
+     */
+    showDocumentFeedback(selectedText?: string): void;
+    /**
+     * 公共方法：显示聊天窗口并自动发送选中的文本
+     * @param text - 要自动发送的文本内容
+     */
+    showChatAndSendText(text: string): void;
+    /**
+     * 公共方法：重新初始化反馈功能
+     */
+    reinitFeedbackFeature(): void;
+    /**
+     * 公共方法：强制初始化反馈功能（用于调试）
+     */
+    forceInitFeedbackFeature(): {
+        success: boolean;
+        methods: {
+            showDocumentFeedback: boolean;
+            testTextSelection: boolean;
+        };
+        elements: {
+            tooltip: boolean;
+            dialog: boolean;
+            tooltipDOM: boolean;
+            dialogDOM: boolean;
+        };
+    };
+    /**
+     * 公共方法：测试文本选择功能
+     */
+    testTextSelection(text?: string): void;
+    /**
+     * 公共方法：获取调试信息
+     */
+    getDebugInfo(): {
+        config: BytedeskConfig;
+        feedbackConfig: FeedbackConfig | undefined;
+        feedbackTooltip: boolean;
+        feedbackDialog: boolean;
+        selectedText: string;
+        methods: {
+            showDocumentFeedback: "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function";
+            testTextSelection: "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function";
+            forceInitFeedbackFeature: "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function";
+        };
+    };
+    /**
+     * 公共方法：销毁反馈功能
+     */
+    private destroyFeedbackFeature;
+}
+export default BytedeskWeb;
+
+declare interface ChatConfig {
+    org: string;
+    t: string;
+    sid: string;
+    title?: string;
+    uid?: string;
+    visitorUid?: string;
+    nickname?: string;
+    avatar?: string;
+    mobile?: string;
+    email?: string;
+    note?: string;
+    channel?: string;
+    goodsInfo?: string;
+    orderInfo?: string;
+    extra?: string;
+    vipLevel?: string;
+    debug?: boolean;
+    draft?: boolean;
+    settingsUid?: string;
+    loadHistory?: boolean;
+    threadDetail?: string | boolean;
+    visitorProfile?: string | boolean;
+    [key: string]: string | number | boolean | undefined;
+}
+
+export declare interface FeedbackConfig {
+    enabled?: boolean;
+    trigger?: 'selection' | 'button' | 'both';
+    showOnSelection?: boolean;
+    selectionText?: string;
+    askAiText?: string;
+    buttonText?: string;
+    dialogTitle?: string;
+    placeholder?: string;
+    submitText?: string;
+    cancelText?: string;
+    successMessage?: string;
+    categoryNames?: string[];
+    requiredTypes?: boolean;
+    typesSectionTitle?: string;
+    typesDescription?: string;
+    submitScreenshot?: boolean;
+    onSubmit?: (feedback: FeedbackData) => void;
+    onCancel?: () => void;
+    onAskAi?: (selectedText: string) => void;
+}
+
+export declare interface FeedbackData {
+    selectedText: string;
+    images?: string[];
+    content: string;
+    categoryNames?: string;
+    url: string;
+    title: string;
+    userAgent: string;
+    visitorUid?: string;
+    orgUid?: string;
+}
+
+declare interface InviteConfig {
+    show?: boolean;
+    text?: string;
+    icon?: string;
+    delay?: number;
+    loop?: boolean;
+    loopDelay?: number;
+    loopCount?: number;
+    acceptText?: string;
+    rejectText?: string;
+    onAccept?: () => void;
+    onReject?: () => void;
+    onClose?: () => void;
+    onOpen?: () => void;
+}
+
+declare interface MessageBubbleClickEvent {
+    uid?: string;
+    type?: string;
+    content?: unknown;
+    navigateToPath?: string | null;
+    extra?: unknown;
+    position?: string;
+    status?: string;
+}
+
+declare interface MinimizedBarConfig {
+    text?: string;
+}
+
+declare interface SetConfigOptions {
+    replaceChatConfig?: boolean;
+    replaceTabsConfig?: boolean;
+}
+
+declare interface TabsConfig {
+    messages?: boolean;
+    thread?: boolean;
+    help?: boolean;
+}
+
+declare interface Theme {
+    mode?: 'light' | 'dark' | 'system';
+    textColor?: string;
+    backgroundColor?: string;
+}
+
+declare interface WindowConfig {
+    width?: number;
+    height?: number;
+}
+
+export { }

@@ -1,0 +1,229 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-04-24 13:33:40
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-05-14 16:01:40
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.llm_faq;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
+
+import com.alibaba.fastjson2.JSON;
+import com.bytedesk.kbase.article.elastic.ArticleElastic;
+import com.bytedesk.kbase.article.vector.ArticleVector;
+import com.bytedesk.kbase.llm_chunk.elastic.ChunkElastic;
+import com.bytedesk.kbase.llm_chunk.vector.ChunkVector;
+import com.bytedesk.kbase.llm_faq.elastic.FaqElastic;
+import com.bytedesk.kbase.llm_faq.vector.FaqVector;
+import com.bytedesk.kbase.llm_text.elastic.TextElastic;
+import com.bytedesk.kbase.llm_text.vector.TextVector;
+import com.bytedesk.kbase.llm_webpage.elastic.WebpageElastic;
+import com.bytedesk.kbase.llm_webpage.vector.WebpageVector;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+
+@Data
+@Builder
+@Accessors(chain = true)
+@AllArgsConstructor
+@NoArgsConstructor
+public class FaqProtobuf implements Serializable {
+
+	private static final long serialVersionUID = 1L;
+
+    private String uid;
+
+    private String question;
+
+    private String answer;
+
+    private String type;
+
+    private String sourceUid;
+
+    private String language;
+
+    private String sourceLanguage;
+
+    private Boolean translated;
+
+    @Builder.Default
+    private List<FaqProtobuf> relatedFaqs = new ArrayList<>();
+
+    public static FaqProtobuf fromJson(String faq) {
+        return JSON.parseObject(faq, FaqProtobuf.class);
+    }
+
+    public static FaqProtobuf fromElastic(FaqElastic faq) {
+        return FaqProtobuf.builder()
+                .uid(faq.getUid())
+                .question(faq.getQuestion())
+                .answer(faq.getAnswer())
+                .type(FaqProtobufTypeEnum.FAQ.name())
+                .sourceUid(faq.getSourceUid())
+                .language(faq.getLanguage())
+                .sourceLanguage(faq.getSourceLanguage())
+                .translated(faq.getTranslated())
+                .build();
+    }
+
+    public static FaqProtobuf fromFaqVector(FaqVector faq) {
+        return FaqProtobuf.builder()
+                .uid(faq.getUid())
+                .question(faq.getQuestion())
+                .answer(faq.getAnswer())
+                .type(FaqProtobufTypeEnum.FAQ.name())
+                .sourceUid(faq.getSourceUid())
+                .language(faq.getLanguage())
+                .sourceLanguage(faq.getSourceLanguage())
+                .translated(faq.getTranslated())
+                .build();
+    }
+
+    public static FaqProtobuf fromText(TextElastic text) {
+        return FaqProtobuf.builder()
+                .uid(text.getUid())
+                .question(text.getTitle())
+                .answer(text.getContent())
+                .type(FaqProtobufTypeEnum.TEXT.name())
+                .sourceUid(text.getSourceUid())
+                .language(text.getLanguage())
+                .sourceLanguage(text.getSourceLanguage())
+                .translated(text.getTranslated())
+                .build();
+    }
+
+    // from text vector
+    public static FaqProtobuf fromTextVector(TextVector text) {
+    	return FaqProtobuf.builder()
+                .uid(text.getUid())
+                .question(text.getTitle())
+                .answer(text.getContent())
+                .type(FaqProtobufTypeEnum.TEXT.name())
+                .sourceUid(text.getSourceUid())
+                .language(text.getLanguage())
+                .sourceLanguage(text.getSourceLanguage())
+                .translated(text.getTranslated())
+                .build();
+    }
+
+    // from feishu doc elastic
+    public static FaqProtobuf fromFeishuDoc(com.bytedesk.kbase.llm_feishu.elastic.FeishuDocElastic doc) {
+        return FaqProtobuf.builder()
+                .uid(doc.getUid())
+                .question(doc.getTitle())
+                .answer(doc.getContent())
+                .type(FaqProtobufTypeEnum.FEISHU.name())
+                .sourceUid(doc.getSourceUid())
+                .language(doc.getLanguage())
+                .sourceLanguage(null)
+                .translated(false)
+                .build();
+    }
+
+    // from feishu doc vector
+    public static FaqProtobuf fromFeishuDocVector(com.bytedesk.kbase.llm_feishu.vector.FeishuDocVector doc) {
+        return FaqProtobuf.builder()
+                .uid(doc.getUid())
+                .question(doc.getTitle())
+                .answer(doc.getContent())
+                .type(FaqProtobufTypeEnum.FEISHU.name())
+                .sourceUid(doc.getSourceUid())
+                .language(doc.getLanguage())
+                .sourceLanguage(null)
+                .translated(false)
+                .build();
+    }
+
+    public static FaqProtobuf fromChunk(ChunkElastic chunk) {
+        return FaqProtobuf.builder()
+               .uid(chunk.getUid())
+               .question(chunk.getName())
+               .answer(chunk.getContent())
+               .type(FaqProtobufTypeEnum.CHUNK.name())
+               .sourceUid(chunk.getSourceUid())
+               .language(chunk.getLanguage())
+               .sourceLanguage(chunk.getSourceLanguage())
+               .translated(chunk.getTranslated())
+               .build();
+    }
+
+    // from chunk vector
+    public static FaqProtobuf fromChunkVector(ChunkVector chunk) {
+    	return FaqProtobuf.builder()
+                .uid(chunk.getUid())
+                .question(chunk.getName())
+                .answer(chunk.getContent())
+                .type(FaqProtobufTypeEnum.CHUNK.name())
+                .sourceUid(chunk.getSourceUid())
+                .language(chunk.getLanguage())
+                .sourceLanguage(chunk.getSourceLanguage())
+                .translated(chunk.getTranslated())
+                .build();
+    }
+
+    public static FaqProtobuf fromArticle(ArticleElastic article) {
+        return FaqProtobuf.builder()
+                .uid(article.getUid())
+                .question(article.getTitle())
+                .answer(article.getContentMarkdown() != null ? article.getContentMarkdown() : article.getSummary())
+                .type(FaqProtobufTypeEnum.ARTICLE.name())
+                .sourceUid(article.getUid())
+                .build();
+    }
+
+    // from article vector
+    public static FaqProtobuf fromArticleVector(ArticleVector article) {
+        return FaqProtobuf.builder()
+                .uid(article.getUid())
+                .question(article.getTitle())
+                .answer(article.getContentMarkdown() != null ? article.getContentMarkdown() : article.getSummary())
+                .type(FaqProtobufTypeEnum.ARTICLE.name())
+                .sourceUid(article.getUid())
+                .build();
+    }
+
+    public static FaqProtobuf fromWebpage(WebpageElastic webpage) {
+        return FaqProtobuf.builder()
+                .uid(webpage.getUid())
+                .question(webpage.getTitle())
+                .answer(webpage.getContent())
+                .type(FaqProtobufTypeEnum.WEBPAGE.name())
+                .sourceUid(webpage.getSourceUid())
+                .language(webpage.getLanguage())
+                .sourceLanguage(webpage.getSourceLanguage())
+                .translated(webpage.getTranslated())
+                .build();
+    }
+
+    // from webpage vector
+    public static FaqProtobuf fromWebpageVector(WebpageVector webpage) {
+        return FaqProtobuf.builder()
+                .uid(webpage.getUid())
+                .question(webpage.getTitle())
+                .answer(webpage.getContent())
+                .type(FaqProtobufTypeEnum.WEBPAGE.name())
+                .sourceUid(webpage.getSourceUid())
+                .language(webpage.getLanguage())
+                .sourceLanguage(webpage.getSourceLanguage())
+                .translated(webpage.getTranslated())
+                .build();
+    }
+    
+    public String toJson() {
+        return JSON.toJSONString(this);
+    }
+}

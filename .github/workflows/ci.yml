@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 定制层脚本语法
+        run: python -m compileall -q deploy-selfdesk/scripts deploy-selfdesk/dashboard
+
+      - name: PowerShell 语法
+        shell: pwsh
+        run: |
+          $bad = 0
+          Get-ChildItem deploy-selfdesk/scripts -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Host "::error file=$($_.Name)::$($errors[0].Message)"
+              $bad++
+            }
+          }
+          if ($bad -gt 0) { exit 1 }
+          Write-Host "PowerShell 语法检查通过"
+
+      - name: 密钥扫描
+        run: |
+          set -e
+          if grep -rInE "(^|[^A-Za-z0-9])sk-[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY" \
+             --exclude-dir=.git --exclude-dir=target --exclude-dir=node_modules . ; then
+            echo "::error::发现疑似密钥"
+            exit 1
+          fi
+          echo "未发现疑似密钥"
+
+      - name: 敏感文件未被跟踪
+        run: |
+          set -e
+          if git ls-files | grep -E "(^|/)(\.env(\.local)?|\.deepseek-key|.*\.jar)$"; then
+            echo "::error::敏感文件或产物被提交"
+            exit 1
+          fi
+          echo "工作区干净"
+
+      - name: 默认口令已占位化
+        run: |
+          set -e
+          # 只允许配置文件里出现占位符，不允许看起来像真实口令的长串
+          if grep -rInE "password=['\"]?[A-Za-z0-9]{12,}['\"]?$" \
+             --include="*.properties" --include="*.yml" --include="*.yaml" \
+             --exclude-dir=target . | grep -v "change-me"; then
+            echo "::error::配置中存在疑似真实口令"
+            exit 1
+          fi
+          echo "口令检查通过"

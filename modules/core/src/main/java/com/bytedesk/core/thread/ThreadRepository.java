@@ -1,0 +1,194 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-12 15:04:05
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.thread;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.time.ZonedDateTime;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import com.bytedesk.core.rbac.user.UserEntity;
+
+import io.swagger.v3.oas.annotations.tags.Tag;
+
+@Tag(name = "thread - 会话")
+public interface ThreadRepository extends JpaRepository<ThreadEntity, Long>, JpaSpecificationExecutor<ThreadEntity> {
+        
+        Optional<ThreadEntity> findByUid(String uid);
+
+        List<ThreadEntity> findByUidInAndDeletedFalse(List<String> uids);
+
+        List<ThreadEntity> findByOrgUidAndTypeAndStatusInAndDeletedFalseOrderByUpdatedAtDescCreatedAtDesc(
+                        String orgUid,
+                        String type,
+                        List<String> statuses);
+
+        Boolean existsByUid(String uid);
+
+        long countByOrgUidAndDeletedFalse(String orgUid);
+
+        long countByOrgUidAndCreatedAtBetweenAndDeletedFalse(String orgUid, ZonedDateTime start,
+                        ZonedDateTime end);
+
+        long countByOrgUidAndStatusNotInAndDeletedFalse(String orgUid, List<String> statuses);
+
+        long countByOrgUidAndStatusAndDeletedFalse(String orgUid, String status);
+
+        @Query("SELECT t.status, COUNT(t) FROM ThreadEntity t "
+                        + "WHERE t.orgUid = :orgUid AND t.deleted = false "
+                        + "GROUP BY t.status")
+        List<Object[]> countStatusByOrgUid(@Param("orgUid") String orgUid);
+
+        @Query("SELECT t.status, COUNT(t) FROM ThreadEntity t "
+                        + "WHERE t.orgUid = :orgUid AND t.deleted = false "
+                        + "AND t.createdAt >= :start AND t.createdAt < :end "
+                        + "GROUP BY t.status")
+        List<Object[]> countStatusByOrgUidAndCreatedAtBetween(@Param("orgUid") String orgUid,
+                        @Param("start") ZonedDateTime start,
+                        @Param("end") ZonedDateTime end);
+
+        @Query("SELECT t.transferStatus, COUNT(t) FROM ThreadEntity t "
+                        + "WHERE t.orgUid = :orgUid AND t.deleted = false "
+                        + "AND t.createdAt >= :start AND t.createdAt < :end "
+                        + "GROUP BY t.transferStatus")
+        List<Object[]> countTransferStatusByOrgUidAndCreatedAtBetween(@Param("orgUid") String orgUid,
+                        @Param("start") ZonedDateTime start,
+                        @Param("end") ZonedDateTime end);
+
+        /** used for member thread type */
+        Optional<ThreadEntity> findFirstByTopicAndOwnerAndDeletedOrderByUpdatedAtDesc(String topic, UserEntity owner, Boolean deleted);
+
+        List<ThreadEntity> findByTopicAndDeletedOrderByCreatedAtDesc(String topic, Boolean deleted);
+
+        Optional<ThreadEntity> findFirstByTopicAndDeletedOrderByCreatedAtDesc(String topic, Boolean deleted);
+
+        Optional<ThreadEntity> findFirstByTopicAndStatusNotContainingAndDeleted(String topic, String status, Boolean deleted);
+
+        // JPQL to avoid full-session auto-flush triggered by native query (Hibernate 6 flushes all
+        // dirty entities before native SQL; JPQL only flushes entities relevant to the query).
+        // This prevents StaleObjectStateException on unrelated entities (e.g. VisitorEntity) when
+        // concurrent transactions update the same row.
+        @Query("SELECT t FROM ThreadEntity t WHERE t.topic = ?1 AND t.status NOT IN ?2 AND t.deleted = ?3 ORDER BY t.updatedAt DESC, t.createdAt DESC LIMIT 1")
+        Optional<ThreadEntity> findTopicAndStatusesNotInAndDeleted(String topic, List<String> statuses, Boolean deleted);
+
+        Page<ThreadEntity> findByOwnerAndHideAndDeleted(UserEntity owner, Boolean hide, Boolean deleted, Pageable pageable);
+
+        List<ThreadEntity> findFirstByTopic(String topic);
+        
+        List<ThreadEntity> findByStatusAndDeleted(String status, Boolean deleted);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.status IN :statuses AND t.deleted = :deleted")
+        List<ThreadEntity> findByStatusesAndDeleted(@Param("statuses") List<String> statuses, Boolean deleted);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.type IN :types AND t.status not IN :statuses AND t.deleted = :deleted")
+        List<ThreadEntity> findByTypesInAndStatusesNotInAndDeleted(@Param("types") List<String> types, @Param("statuses") List<String> statuses, Boolean deleted);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.type IN :types AND t.status = :status AND t.deleted = false")
+        List<ThreadEntity> findByTypesInAndStatusAndDeletedFalse(@Param("types") List<String> types, @Param("status") String status);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.type IN :types AND t.status != :status AND t.deleted = false")
+        List<ThreadEntity> findByTypesInAndStatusNotAndDeletedFalse(@Param("types") List<String> types, @Param("status") String status);
+
+        @Query("SELECT COUNT(*) FROM ThreadEntity t WHERE t.topic = :topic AND t.status = :status AND t.deleted = false")
+        int countByTopicAndStatusAndDeletedFalse(@Param("topic") String topic, @Param("status") String status);
+
+        // count by topic and status not
+        @Query("SELECT COUNT(*) FROM ThreadEntity t WHERE t.topic = :topic AND t.status != :status AND t.deleted = false")
+        int countByTopicAndStatusNotAndDeletedFalse(@Param("topic") String topic, @Param("status") String status);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.topic = :topic AND t.status != :status AND t.deleted = false")
+        List<ThreadEntity> findByTopicAndStatusNotAndDeletedFalse(@Param("topic") String topic, @Param("status") String status);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.topic IN :topics AND t.deleted = false")
+        List<ThreadEntity> findByTopicsInAndDeletedFalse(@Param("topics") Set<String> topics);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.topic IN :topics AND t.deleted = false")
+        Page<ThreadEntity> findByTopicsInAndDeletedFalse(@Param("topics") Set<String> topics, Pageable pageable);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.topic LIKE :topicPrefix AND t.status = :status AND t.deleted = false ORDER BY t.createdAt ASC")
+        List<ThreadEntity> findByTopicStartsWithAndStatusAndDeletedFalse(@Param("topicPrefix") String topicPrefix, @Param("status") String status);
+
+        /**
+         * 统计在时间范围内按关闭来源分组的数量
+         */
+        @Query("SELECT t.closeType, COUNT(t) FROM ThreadEntity t WHERE t.status = 'CLOSED' AND t.deleted = false AND t.updatedAt BETWEEN :start AND :end GROUP BY t.closeType")
+        List<Object[]> countClosedGroupedByCloseType(@Param("start") java.time.ZonedDateTime start, @Param("end") java.time.ZonedDateTime end);
+
+        @Query("SELECT t FROM ThreadEntity t WHERE t.type IN :types AND t.status = :status AND t.deleted = false AND t.closedAt IS NOT NULL AND t.closedAt <= :closedBefore ORDER BY t.closedAt ASC")
+        Page<ThreadEntity> findClosedCustomerServiceThreadsBefore(
+                        @Param("types") List<String> types,
+                        @Param("status") String status,
+                        @Param("closedBefore") ZonedDateTime closedBefore,
+                        Pageable pageable);
+
+        @Query("SELECT COUNT(t) > 0 FROM ThreadEntity t WHERE t.topic = :topic AND t.uid <> :excludeUid AND t.deleted = false AND t.createdAt > :createdAfter")
+        boolean existsByTopicAndUidNotAndCreatedAtAfter(
+                        @Param("topic") String topic,
+                        @Param("excludeUid") String excludeUid,
+                        @Param("createdAfter") ZonedDateTime createdAfter);
+
+        /**
+         * 根据访客ID查找最近的客服会话记录
+         * 查找访客与客服的最近一次会话，按更新时间倒序排列
+         */
+        @Query(value = "SELECT * FROM bytedesk_core_thread t WHERE t.thread_user LIKE %:visitorUid% AND t.thread_type IN ('AGENT', 'WORKGROUP', 'ROBOT') AND t.is_deleted = false ORDER BY t.updated_at DESC", nativeQuery = true)
+        List<ThreadEntity> findRecentAgentThreadsByVisitorUid(@Param("visitorUid") String visitorUid);
+
+        /**
+         * 根据访客UID分页查询其相关的会话列表
+         * 通过判断user字段中是否包含访客uid来查询
+         */
+        // @Query(value = "SELECT * FROM bytedesk_core_thread t WHERE t.thread_user LIKE %:visitorUid% AND t.is_deleted = false ORDER BY t.updated_at DESC", nativeQuery = true)
+        // Page<ThreadEntity> findByVisitorUidInUserField(@Param("visitorUid") String visitorUid, Pageable pageable);
+
+        /**
+         * 根据访客UID分页查询其相关的会话列表（支持基础筛选）
+         * - thread uid 存储于 uuid 列（BaseEntity.uid -> uuid）
+         * - topic 存储于 thread_topic
+         * - type 存储于 thread_type
+         * - channel 默认列名为 channel
+         */
+        // @Query(
+        //                 value = "SELECT * FROM bytedesk_core_thread t "
+        //                                 + "WHERE t.thread_user LIKE %:visitorUid% "
+        //                                 + "AND t.is_deleted = false "
+        //                                 + "AND (:topic IS NULL OR :topic = '' OR t.thread_topic LIKE CONCAT('%', :topic, '%')) "
+        //                                 + "AND (:type IS NULL OR :type = '' OR t.thread_type = :type) "
+        //                                 + "AND (:channel IS NULL OR :channel = '' OR t.channel = :channel) "
+        //                                 + "AND (:searchText IS NULL OR :searchText = '' OR t.thread_topic LIKE CONCAT('%', :searchText, '%') OR t.uuid LIKE CONCAT('%', :searchText, '%')) "
+        //                                 + "ORDER BY t.updated_at DESC",
+        //                 countQuery = "SELECT COUNT(1) FROM bytedesk_core_thread t "
+        //                                 + "WHERE t.thread_user LIKE %:visitorUid% "
+        //                                 + "AND t.is_deleted = false "
+        //                                 + "AND (:topic IS NULL OR :topic = '' OR t.thread_topic LIKE CONCAT('%', :topic, '%')) "
+        //                                 + "AND (:type IS NULL OR :type = '' OR t.thread_type = :type) "
+        //                                 + "AND (:channel IS NULL OR :channel = '' OR t.channel = :channel) "
+        //                                 + "AND (:searchText IS NULL OR :searchText = '' OR t.thread_topic LIKE CONCAT('%', :searchText, '%') OR t.uuid LIKE CONCAT('%', :searchText, '%'))",
+        //                 nativeQuery = true)
+        // Page<ThreadEntity> findByVisitorUidInUserFieldWithFilters(
+        //                 @Param("visitorUid") String visitorUid,
+        //                 @Param("topic") String topic,
+        //                 @Param("type") String type,
+        //                 @Param("channel") String channel,
+        //                 @Param("searchText") String searchText,
+        //                 Pageable pageable);
+
+}

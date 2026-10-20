@@ -1,0 +1,238 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-14 10:45:08
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-18 14:41:46
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.settings_service;
+
+import java.io.Serializable;
+import java.util.List;
+
+import com.bytedesk.core.enums.LanguageEnum;
+import com.bytedesk.kbase.llm_faq.FaqResponseVisitor;
+import com.bytedesk.kbase.quick_button.QuickButtonResponseVisitor;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+
+@Data
+@Builder
+@Accessors(chain = true)
+@AllArgsConstructor
+@NoArgsConstructor
+public class ServiceSettingsResponseVisitor implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    private LanguageEnum language;
+
+    private Boolean autoPopup;
+
+    private Boolean showTopTip;
+
+    private String topTip;
+
+    // 评价按钮显示控制已迁移至 ToolbarSettings.rate
+    private Boolean autoInviteRate;
+
+    private String inviteRateTip;
+
+    private Integer rateMsgCount;
+
+    private Boolean showPreForm;
+
+    private Boolean preFormRequired;
+
+    private String preForm;
+
+    private String preFormUid;
+
+    private Boolean showHistory;
+
+    /**
+     * 访客端是否显示消息状态（送达/已读等）
+     */
+    private Boolean showMessageStatus;
+
+    /**
+     * 是否允许访客端撤回消息
+     */
+    private Boolean allowVisitorRecall;
+
+    /**
+     * 访客端撤回消息时限（分钟）
+     */
+    private Integer visitorRecallMinutes;
+
+    /**
+     * 访客发起咨询是否需要登录
+     */
+    private Boolean requireLogin;
+
+    // 输入联想开关
+    // private Boolean showInputAssociation;
+
+    private Boolean showCaptcha;
+
+    /** auto close time in min - 默认自动关闭时间，单位分钟 */
+    private Double autoCloseMin;
+
+    // 桌面版聊天窗口右侧iframe
+    private Boolean showRightIframe;
+
+    // 桌面版聊天窗口右侧iframe地址
+    private String rightIframeUrl;
+
+    // 是否启用访客输入联想
+    private Boolean inputAssociationEnabled;
+
+    // 输入联想关联知识库
+    private String inputAssociationKbUid;
+
+    // 访客输入预览：访客输入内容预览发送给客服（MESSAGE_TYPE_PREVIEW）
+    private Boolean inputPreviewEnabled;
+
+    // 输入预览是否一直显示（客服端预览框常驻）
+    private Boolean inputPreviewAlwaysShow;
+
+    // 输入预览显示时长（秒），仅当 inputPreviewAlwaysShow=false 时生效
+    private Integer inputPreviewShowSeconds;
+
+    // 欢迎问题
+    private List<FaqResponseVisitor> welcomeFaqs;
+    private String welcomeKbUid;
+
+    private Boolean showFaqs;
+    private List<FaqResponseVisitor> faqs;
+    private String faqKbUid;
+
+    private Boolean showQuickButtons;
+
+    private List<QuickButtonResponseVisitor> quickButtons;
+    //
+    // private Boolean showGuessFaqs;
+    // // 猜你想问
+    // private List<FaqResponseVisitor> guessFaqs;
+    // //
+    // private Boolean showHotFaqs;
+    // // 热门问题
+    // private List<FaqResponseVisitor> hotFaqs;
+    // //
+    // private Boolean showShortcutFaqs;
+    // // 快捷功能
+    // private List<FaqResponseVisitor> shortcutFaqs;
+
+    private Boolean showLogo;
+
+    /**
+     * 访客端是否显示客服/机器人头像（左侧消息）
+     */
+    private Boolean showAgentAvatar;
+
+    /**
+     * 访客端是否显示客服/机器人昵称（左侧消息）
+     */
+    private Boolean showAgentNickname;
+
+    /**
+     * 访客端是否显示访客自己头像（右侧消息）
+     */
+    private Boolean showVisitorAvatar;
+
+    /**
+     * 访客端是否显示访客自己昵称（右侧消息）
+     */
+    private Boolean showVisitorNickname;
+
+    // 是否允许访客主动转人工
+    private Boolean allowVisitorManualTransfer;
+
+    // 访客端转人工按钮文案
+    private String manualTransferLabel;
+
+    // 访客端是否隐藏机器人思考过程
+    private Boolean hideThinkingProcess;
+
+    /**
+     * 访客端是否隐藏 AI 免责声明（如 "内容由AI生成"）
+     */
+    private Boolean hideAIDisclaimer;
+
+    /**
+     * 自定义 AI 免责声明文案，为空时访客端使用 i18n 默认值
+     */
+    private String aiDisclaimerText;
+
+    /**
+     * 是否禁用大模型问答（平台级开关 ai.disableQa）。
+     * true 时 visitor 前端发送消息直接展示固定回复，不发起大模型请求。
+     */
+    private Boolean disableAiQa;
+
+    /**
+     * 禁用大模型问答时的固定回复文案（平台级配置 ai.disableQaReply）。
+     * 为空时前端使用 i18n 默认文案。
+     */
+    private String disableAiQaReply;
+
+    // 工具栏显示控制（固定字段，未设置则默认为显示）
+    private ToolbarSettings toolbar;
+
+    /**
+     * 留言方式配置：
+     * - true: 在会话中发送“留言表单”(MESSAGE_TYPE_FORM)
+     * - false: 使用对话框方式留言
+     */
+    private Boolean messageLeaveFormEnabled;
+
+    /**
+     * 留言表单 schema(JSON)，当 messageLeaveFormEnabled=true 时使用
+     */
+    private String messageLeaveForm;
+
+    /**
+     * 客服离线时是否允许访客继续发送消息。
+     */
+    private Boolean messageLeaveAllowVisitorSendWhenOffline;
+
+    /**
+     * 是否使用自定义留言表单（关联 FormEntity.uid）
+     */
+    private Boolean messageLeaveCustomFormEnabled;
+
+    /**
+     * 自定义留言表单 uid（FormEntity.uid）
+     */
+    private String messageLeaveFormUid;
+
+    /**
+     * 访客发消息前自动回复开关（工作组）
+     */
+    private Boolean autoReplyEnabled;
+
+    /**
+     * 自动回复设置 UID（AutoReplySettingsEntity.uid）
+     */
+    private String autoReplySettingsUid;
+
+    /**
+     * 来源会话 uid：本会话由访客从另一商户会话发起平台客服介入时记录（用户-商户纠纷溯源）
+     */
+    private String originThreadUid;
+
+    /**
+     * 来源会话所属组织 uid（平台客服可据此跨组织只读回查原会话）
+     */
+    private String originOrgUid;
+}

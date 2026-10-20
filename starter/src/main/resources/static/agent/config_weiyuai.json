@@ -1,0 +1,14 @@
+{
+    "enabled": true,
+    "apiUrl": "http://127.0.0.1:9003",
+    "uploadApiUrl": "http://127.0.0.1:9003",
+    "websocketUrl": "ws://127.0.0.1:9003/websocket",
+    "stompUrl": "ws://127.0.0.1:9003/stomp",
+    "htmlUrl": "http://127.0.0.1:9003",
+    "sipHttpUrl": "https://sip.127.0.0.1:9003:7443",
+    "sipWebsocketUrl": "wss://sip.127.0.0.1:9003:7443",
+    "janusHttpUrl": "https://janus.127.0.0.1:9003/janus",
+    "janusWebsocketUrl": "wss://janus.127.0.0.1:9003/janus",
+    "stunUrl": "stun:stun.127.0.0.1:9003:3478",
+    "turnUrl": "turn:turn.127.0.0.1:9003:3478"
+}

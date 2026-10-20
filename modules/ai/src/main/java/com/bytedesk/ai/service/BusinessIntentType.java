@@ -1,0 +1,20 @@
+package com.bytedesk.ai.service;
+
+public enum BusinessIntentType {
+    CASUAL,
+    PRODUCT_CONSULT,
+    PRICE_QUERY,
+    ORDER_QUERY,
+    ORDER_CREATE,
+    REFUND_QUERY,
+    LOGISTICS_QUERY,
+    AFTER_SALES,
+    PAYMENT_ISSUE,
+    ACCOUNT_ISSUE,
+    TECHNICAL_SUPPORT,
+    FEATURE_SUGGESTION,
+    PROMOTION,
+    COMPLAINT,
+    HUMAN_TRANSFER,
+    UNKNOWN
+}

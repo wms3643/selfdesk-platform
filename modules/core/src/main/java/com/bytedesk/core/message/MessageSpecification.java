@@ -1,0 +1,182 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-05 22:53:57
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-26 16:28:43
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.message;
+
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.base.BaseSpecification;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.message.enums.MessageTypeEnum;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.topic.TopicUtils;
+
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
+
+public class MessageSpecification extends BaseSpecification<MessageEntity, MessageRequest> {
+
+    static List<String> resolveTopicKeywordsForComponentType(String componentType) {
+        if (!StringUtils.hasText(componentType)) {
+            return List.of();
+        }
+        if (TypeConsts.COMPONENT_TYPE_TEAM.equals(componentType)) {
+            return List.of("group", "member");
+        }
+        if (TypeConsts.COMPONENT_TYPE_SERVICE.equals(componentType)) {
+            return List.of("agent", "workgroup", "robot");
+        }
+        if (TypeConsts.COMPONENT_TYPE_ROBOT.equals(componentType)) {
+            return List.of("robot");
+        }
+        return List.of();
+    }
+
+    private static Predicate buildTopicKeywordPredicate(Join<Object, Object> threadJoin,
+            jakarta.persistence.criteria.CriteriaBuilder criteriaBuilder,
+            List<String> topicKeywords) {
+        return criteriaBuilder.or(topicKeywords.stream()
+                .map(keyword -> criteriaBuilder.like(threadJoin.get("topic"), "%" + keyword + "%"))
+                .collect(Collectors.toList())
+                .toArray(new Predicate[0]));
+    }
+
+    public static Specification<MessageEntity> search(MessageRequest request, AuthService authService) {
+        return (root, query, criteriaBuilder) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            // predicates.addAll(getBasicPredicates(root, criteriaBuilder, request, authService));
+            
+            // 获取thread关联，用于访问thread的属性
+            Join<Object, Object> threadJoin = root.join("thread", JoinType.LEFT);
+            
+            if (StringUtils.hasText(request.getComponentType())) {
+                // 
+                if (TypeConsts.COMPONENT_TYPE_TEAM.equals(request.getComponentType())) {
+                    predicates.add(buildTopicKeywordPredicate(threadJoin, criteriaBuilder,
+                            resolveTopicKeywordsForComponentType(request.getComponentType())));
+                } else if (TypeConsts.COMPONENT_TYPE_SERVICE.equals(request.getComponentType())) {
+                    predicates.add(buildTopicKeywordPredicate(threadJoin, criteriaBuilder,
+                            resolveTopicKeywordsForComponentType(request.getComponentType())));
+                } else if (TypeConsts.COMPONENT_TYPE_ROBOT.equals(request.getComponentType())) {
+                    predicates.add(buildTopicKeywordPredicate(threadJoin, criteriaBuilder,
+                            resolveTopicKeywordsForComponentType(request.getComponentType())));
+                } else if (TypeConsts.COMPONENT_TYPE_VISITOR.equals(request.getComponentType())) {
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.NOTICE.name()));
+                    // 访客端查询消息：过滤掉一些消息类型，比如：TRANSFER, TRANSFER_ACCEPT, TRANSFER_REJECT
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.TRANSFER.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.TRANSFER_ACCEPT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.TRANSFER_REJECT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.TRANSFER_TIMEOUT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.TRANSFER_CANCEL.name()));
+                    // 过滤掉 INVITE, INVITE_ACCEPT, INVITE_REJECT
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE_ACCEPT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE_REJECT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE_TIMEOUT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE_CANCEL.name()));
+                    // INVITE_EXIT/INVITE_REMOVE
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE_EXIT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.INVITE_REMOVE.name()));
+                    // MESSAGE_TYPE_NOTIFICATION_AGENT_REPLY_TIMEOUT
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.NOTIFICATION_AGENT_REPLY_TIMEOUT.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.NOTIFICATION_RATE_SUBMITTED.name()));
+                    // QUEUE_NOTICE, QUEUE_UPDATE
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.QUEUE_NOTICE.name()));
+                    predicates.add(criteriaBuilder.notEqual(root.get("type"), MessageTypeEnum.QUEUE_ACCEPT.name()));
+                }
+            }
+            // predicates.add(criteriaBuilder.equal(root.get("deleted"), false));
+            predicates.addAll(getBasicPredicates(root, criteriaBuilder, request, authService));
+
+            // 时间范围过滤（按消息 createdAt）
+            ZonedDateTime startAt = request.getStartAt();
+            ZonedDateTime endAt = request.getEndAt();
+            if (startAt != null) {
+                predicates.add(criteriaBuilder.greaterThanOrEqualTo(root.get("createdAt"), startAt));
+            }
+            if (endAt != null) {
+                predicates.add(criteriaBuilder.lessThanOrEqualTo(root.get("createdAt"), endAt));
+            }
+
+            // 使用基类方法处理超级管理员权限和组织过滤
+            // addOrgFilterIfNotSuperUser(root, criteriaBuilder, predicates, request, authService);
+            //
+            if (StringUtils.hasText(request.getContent())) {
+                predicates.add(criteriaBuilder.like(root.get("content"), "%" + request.getContent() + "%"));
+            }
+            // 
+            if (StringUtils.hasText(request.getTopic())) {
+                String topic = request.getTopic();
+                Predicate topicPredicate = criteriaBuilder.equal(threadJoin.get("topic"), topic);
+                if (TopicUtils.isOrgMemberTopic(topic)) {
+                    String reverseTopic = TopicUtils.getOrgMemberTopicReverse(topic);
+                    Predicate reverseTopicPredicate = criteriaBuilder.equal(threadJoin.get("topic"), reverseTopic);
+                    predicates.add(criteriaBuilder.or(topicPredicate, reverseTopicPredicate));
+                } else {
+                    predicates.add(topicPredicate);
+                }
+            }
+            String visitorIdentity = StringUtils.hasText(request.getVisitorUid())
+                    ? request.getVisitorUid()
+                    : request.getUid();
+            if (StringUtils.hasText(visitorIdentity)) {
+                predicates.add(criteriaBuilder.like(threadJoin.get("user"), "%" + visitorIdentity + "%"));
+            }
+            // threadUid 替换为 thread.uid
+            if (StringUtils.hasText(request.getThreadUid())) {
+                predicates.add(criteriaBuilder.equal(threadJoin.get("uid"), request.getThreadUid()));
+            }
+            // threadType 替换为 thread.type
+            if (StringUtils.hasText(request.getThreadType())) {
+                predicates.add(criteriaBuilder.equal(threadJoin.get("type"), request.getThreadType()));
+            }
+            // user.nickname
+            if (StringUtils.hasText(request.getNickname())) {
+                predicates.add(criteriaBuilder.like(root.get("user"), "%" + request.getNickname() + "%"));
+            }
+            // messageType
+            if (StringUtils.hasText(request.getType())) {
+                predicates.add(criteriaBuilder.equal(root.get("type"), request.getType()));
+            }
+            // searchText
+            if (StringUtils.hasText(request.getSearchText())) {
+                predicates.add(criteriaBuilder.or(
+                    criteriaBuilder.like(root.get("content"), "%" + request.getSearchText() + "%"),
+                    criteriaBuilder.like(root.get("user"), "%" + request.getSearchText() + "%")
+                ));
+            }
+            // searchDate
+            if (StringUtils.hasText(request.getSearchDate())) {
+                // 解析日期格式，假设是 yyyy-MM-dd, createdAt格式为 yyyy-MM-dd'T'HH:mm:ss.SSSX
+                predicates.add(criteriaBuilder.equal(
+                    criteriaBuilder.function("DATE_FORMAT", String.class, root.get("createdAt"), criteriaBuilder.literal("%Y-%m-%d")),
+                    request.getSearchDate()
+                ));
+            }
+            //
+            if (StringUtils.hasText(request.getChannel())) {
+                predicates.add(criteriaBuilder.like(root.get("channel"), "%" + request.getChannel() + "%"));
+            }
+            //
+            return criteriaBuilder.and(predicates.toArray(new Predicate[0]));
+        };
+    }
+
+}

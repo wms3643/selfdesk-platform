@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="261018-add-ai-token-usage-table" author="copilot">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="bytedesk_ai_token_usage"/>
+            </not>
+        </preConditions>
+        <createTable tableName="bytedesk_ai_token_usage">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_ai_token_usage" nullable="false"/>
+            </column>
+            <column name="uuid" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uk_ai_token_usage_uuid"/>
+            </column>
+            <column name="version" type="INT" defaultValueNumeric="0"/>
+            <column name="created_at" type="TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP"/>
+            <column name="is_deleted" type="BOOLEAN" defaultValueBoolean="false"/>
+            <column name="org_uid" type="VARCHAR(64)"/>
+            <column name="user_uid" type="VARCHAR(64)"/>
+            <column name="level_type" type="VARCHAR(32)"/>
+            <column name="platform_type" type="VARCHAR(32)"/>
+            <column name="provider" type="VARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="model" type="VARCHAR(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="robot_uid" type="VARCHAR(64)"/>
+            <column name="usage_type" type="VARCHAR(32)" defaultValue="CHAT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="prompt_tokens" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="completion_tokens" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="total_tokens" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="success" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="response_time_ms" type="BIGINT" defaultValueNumeric="0"/>
+            <column name="input_cost_usd" type="DECIMAL(18,8)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="output_cost_usd" type="DECIMAL(18,8)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="total_cost_usd" type="DECIMAL(18,8)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="total_cost_cny" type="DECIMAL(18,8)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="input_price_per_million_usd" type="DECIMAL(18,8)" defaultValueNumeric="0"/>
+            <column name="output_price_per_million_usd" type="DECIMAL(18,8)" defaultValueNumeric="0"/>
+            <column name="peak_pricing" type="BOOLEAN" defaultValueBoolean="false"/>
+            <column name="cache_miss_assumed" type="BOOLEAN" defaultValueBoolean="false"/>
+            <column name="pricing_available" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="pricing_version" type="VARCHAR(64)"/>
+        </createTable>
+        <createIndex tableName="bytedesk_ai_token_usage" indexName="idx_ai_token_usage_org_created">
+            <column name="org_uid"/>
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex tableName="bytedesk_ai_token_usage" indexName="idx_ai_token_usage_org_model">
+            <column name="org_uid"/>
+            <column name="provider"/>
+            <column name="model"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

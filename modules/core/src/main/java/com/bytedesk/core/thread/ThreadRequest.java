@@ -1,0 +1,170 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-02-21 10:01:12
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-16 06:32:47
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.thread;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.bytedesk.core.base.BaseRequest;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+
+
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+import lombok.experimental.SuperBuilder;
+
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = false)
+@NoArgsConstructor
+public class ThreadRequest extends BaseRequest {
+    
+    private static final long serialVersionUID = 1L;
+
+    private String topic;
+    
+    // 主题列表，用于批量查询
+    @Builder.Default
+    private List<String> topicList = new ArrayList<>();
+
+    private String status;
+
+    // transfer status
+    // @Builder.Default
+    private String transferStatus;// = ThreadTransferStatusEnum.NONE.name();
+
+    // invite status
+    // @Builder.Default
+    private String inviteStatus;// = ThreadInviteStatusEnum.NONE.name();
+
+    // resolved status
+    // @Builder.Default
+    // private String resolvedStatus = ThreadSummaryStatusEnum.NONE.name();
+
+    @Builder.Default
+    private Boolean top = false;
+
+    @Builder.Default
+    private Boolean unread = false;
+
+    // @Builder.Default
+    // private Integer unreadCount = 0;
+
+    @Builder.Default
+    private Boolean mute = false;
+
+    @Builder.Default
+    private Boolean hide = false;
+
+    @Builder.Default
+    private Integer star = 0;
+
+    @Builder.Default
+    private Boolean fold = false;
+
+    // 替换autoClose：关闭来源类型
+    @Builder.Default
+    private String closeType = "NONE"; // {@link ThreadCloseTypeEnum}
+
+    // 备注
+    private String note;
+
+    // offline
+    @Builder.Default
+    private Boolean offline = false;
+
+    // 标签
+    @Builder.Default
+    private List<String> tagList = new ArrayList<>();
+
+    // 存放被转接客服
+    // @Builder.Default
+    // private List<String> transferUids = new ArrayList<>();
+    private String transfer;
+
+    // 邀请多个客服参与会话
+    @Builder.Default
+    private List<String> inviteUids = new ArrayList<>();
+
+    // 多个管理员监听会话
+    @Builder.Default
+    private List<String> monitorUids = new ArrayList<>();
+
+    // assistants: monitoring agent、quality check agent、robot agent
+    @Builder.Default
+    private List<String> assistantUids = new ArrayList<>();
+
+    // ticketors: ticket observers
+    @Builder.Default
+    private List<String> ticketorUids = new ArrayList<>();
+
+    // group member uids
+    @Builder.Default
+    private List<String> memberUids = new ArrayList<>();
+
+    // used for client query
+    private String componentType;
+
+    // 强制重新创建新会话
+    @Builder.Default
+    private Boolean forceNew = false;
+
+    // 在客服端需要将同一个访客所有的会话合并为一条会话显示，但在管理后台需要显示所有会话，所以需要区分
+    // null 表示调用方未显式传参，由具体接口自行决定默认行为
+    // true/false 表示调用方显式指定是否按 topic 合并
+    private Boolean mergeByTopic;
+
+    private UserProtobuf user;
+
+    private String userNickname;
+
+    private String agentNickname;
+
+    private String robotNickname;
+
+    private String workgroupNickname;
+
+    private String ownerNickname;
+
+    private String ownerUid;
+
+    // 访客唯一标识（与 uid 区分：uid 常用于实体主键；visitorUid 用于跨会话稳定识别）
+    private String visitorUid;
+
+    // 用于更新robot-agent-llm配置，不能修改为UserProtobuf,否则会序列化出错
+    private String agent;
+
+    private String robot;
+
+    private String workgroup;
+
+    // 流程实例ID
+    private String processInstanceId;
+    
+    // 流程定义实体UID
+    private String processEntityUid;
+
+    // 是否取消订阅topic
+    private Boolean unsubscribe;
+
+    /**
+     * 按消息内容搜索：当该字段有值时，返回“消息 content 命中”的关联会话。
+     * 与 searchText（会话字段搜索）相互独立，客户端可根据搜索范围选择传哪个。
+     */
+    private String messageSearchText;
+}

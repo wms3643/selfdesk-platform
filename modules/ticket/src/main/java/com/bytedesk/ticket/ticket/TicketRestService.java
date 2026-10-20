@@ -1,0 +1,1497 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-01-16 18:50:22
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-25 16:53:40
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ticket.ticket;
+
+import org.modelmapper.ModelMapper;
+// import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import com.bytedesk.core.base.BaseRestServiceWithExport;
+import com.bytedesk.core.category.CategoryEntity;
+import com.bytedesk.core.category.CategoryRequest;
+import com.bytedesk.core.category.CategoryRestService;
+import com.bytedesk.core.category.CategoryTypeEnum;
+import com.bytedesk.core.member.MemberRepository;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.enums.ChannelEnum;
+import com.bytedesk.core.enums.LevelEnum;
+import com.bytedesk.core.exception.NotFoundException;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.role.RoleConsts;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserDetailsImpl;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+import com.bytedesk.core.rbac.user.UserTypeEnum;
+import com.bytedesk.core.message.MessageRepository;
+import com.bytedesk.core.message.enums.MessageTypeEnum;
+import com.bytedesk.core.thread.ThreadEntity;
+import com.bytedesk.core.thread.ThreadRestService;
+import com.bytedesk.core.thread.enums.ThreadProcessStatusEnum;
+import com.bytedesk.core.thread.enums.ThreadTypeEnum;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.upload.UploadEntity;
+import com.bytedesk.core.upload.UploadRestService;
+import com.bytedesk.core.topic_subscription.TopicSubscriptionRepository;
+import com.bytedesk.core.utils.Utils;
+import com.bytedesk.service.form.FormEntity;
+import com.bytedesk.ticket.attachment.TicketAttachmentEntity;
+import com.bytedesk.ticket.attachment.TicketAttachmentRepository;
+import com.bytedesk.ticket.process.ProcessEntity;
+import com.bytedesk.ticket.ticket.dto.TicketStatusCountResponse;
+import com.bytedesk.ticket.ticket.enums.TicketStatusEnum;
+import com.bytedesk.ticket.ticket.enums.TicketTypeEnum;
+import com.bytedesk.ticket.ticket.enums.TicketCreateTypeEnum;
+import com.bytedesk.ticket.ticket.event.TicketUpdateAssigneeEvent;
+import com.bytedesk.ticket.ticket.event.TicketUpdateDepartmentEvent;
+import com.bytedesk.ticket.ticket_settings.TicketSettingsEntity;
+import com.bytedesk.ticket.ticket_settings.TicketSettingsRestService;
+import com.bytedesk.ticket.ticket_settings_basic.TicketBasicSettingsEntity;
+import com.bytedesk.ticket.ticket_settings_visibility.TicketVisibilityModeEnum;
+import com.bytedesk.ticket.ticket_settings_visibility.TicketVisibilitySettingsData;
+import com.bytedesk.ticket.ticket_settings_visibility.TicketVisibilitySettingsEntity;
+import com.bytedesk.ticket.ticket_sla_record.TicketSlaRecordRepository;
+import com.bytedesk.ticket.ticket_sla_record.TicketSlaRecordResponse;
+import com.bytedesk.ticket.utils.TicketConvertUtils;
+import com.bytedesk.core.topic.TopicUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class TicketRestService
+        extends BaseRestServiceWithExport<TicketEntity, TicketRequest, TicketResponse, TicketExcel> {
+
+    private final TicketRepository ticketRepository;
+
+    private final TicketAttachmentRepository attachmentRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final AuthService authService;
+
+    private final UidUtils uidUtils;
+
+    private final ThreadRestService threadRestService;
+
+    private final MessageRepository messageRepository;
+
+    private final TopicSubscriptionRepository topicSubscriptionRepository;
+
+    private final TicketSlaRecordRepository ticketSlaRecordRepository;
+
+    private final UploadRestService uploadRestService;
+
+    private final ApplicationEventPublisher applicationEventPublisher;
+
+    private final CategoryRestService categoryRestService;
+
+    private final TicketSettingsRestService ticketSettingsRestService;
+
+    private final MemberRepository memberRepository;
+
+    // @Cacheable(value = "ticket", key = "#uid", unless = "#result == null")
+    @Override
+    public Optional<TicketEntity> findByUid(String uid) {
+        return ticketRepository.findByUid(uid);
+    }
+
+    @Override
+    public Page<TicketResponse> queryByOrg(TicketRequest request) {
+        bindCurrentUserScope(request);
+        if (!StringUtils.hasText(request.getUserUid())) {
+            String reporterUid = resolveReporterUid(request);
+            if (StringUtils.hasText(reporterUid)) {
+                request.setUserUid(reporterUid);
+            }
+        }
+        enrichVisibilityContext(request);
+        Pageable pageable = request.getPageable();
+        Specification<TicketEntity> spec = createSpecification(request);
+        Page<TicketEntity> page = executePageQuery(spec, pageable);
+        return page.map(this::convertToResponse);
+    }
+
+    /**
+     * 客服工作台专用查询（desktop TicketInternalList / TicketHistory）。
+     * 服务端强制客服工作台视角：无视请求 channel 与调用者角色，
+     * 组织管理员/超级管理员同样按 ticketsettings 可见性设置过滤；
+     * 同时防御性屏蔽 superUser 参数，禁止以此放开组织查询范围。
+     * 管理后台全见特权请使用 /query/org（channel=WEB_ADMIN）。
+     */
+    public Page<TicketResponse> queryByOrgForWorkbench(TicketRequest request) {
+        bindCurrentUserScope(request);
+        if (!StringUtils.hasText(request.getUserUid())) {
+            String reporterUid = resolveReporterUid(request);
+            if (StringUtils.hasText(reporterUid)) {
+                request.setUserUid(reporterUid);
+            }
+        }
+        // 工作台无平台视角：防御性屏蔽 superUser 参数（防伪造放开组织范围）
+        request.setSuperUser(Boolean.FALSE);
+        enrichVisibilityContext(request, false);
+        Pageable pageable = request.getPageable();
+        // 不走 createSpecification：其内部会按渠道重新 enrichVisibilityContext，
+        // 伪造 channel=WEB_ADMIN 会重新获得管理员特权，这里直接构建查询规格
+        Specification<TicketEntity> spec = TicketSpecification.search(request, authService);
+        Page<TicketEntity> page = executePageQuery(spec, pageable);
+        return page.map(this::convertToResponse);
+    }
+
+    @Override
+    public Page<TicketResponse> queryByUser(TicketRequest request) {
+        bindCurrentUserScope(request);
+        if (!StringUtils.hasText(request.getUserUid())) {
+            String reporterUid = resolveReporterUid(request);
+            if (StringUtils.hasText(reporterUid)) {
+                request.setUserUid(reporterUid);
+            }
+        }
+        enrichVisibilityContext(request);
+        Pageable pageable = request.getPageable();
+        Specification<TicketEntity> spec = createSpecification(request);
+        Page<TicketEntity> page = executePageQuery(spec, pageable);
+        return page.map(this::convertToResponse);
+    }
+
+    @Override
+    public TicketResponse queryByUid(TicketRequest request) {
+        bindCurrentUserScope(request);
+        Optional<TicketEntity> ticketOptional = findByUid(request.getUid());
+        if (!ticketOptional.isPresent()) {
+            throw new NotFoundException("ticket not found");
+        }
+        TicketEntity ticket = ticketOptional.get();
+        // 常规可见性校验通过后直接返回；未通过时尝试工单卡片分享只读豁免
+        // （查看者所在会话中确实存在该工单的卡片消息时，放行详情查看）
+        assertTicketVisibleOrSharedCard(ticket, isAdminChannelRequest(request), request.getThreadUid());
+        return convertToResponse(ticket);
+    }
+
+    /**
+     * 工单卡片详情专用只读查询：
+     * 不受 ticketsettings 可见性限制，仅要求工单存在且组织匹配。
+     * 用于 desktop 会话中的 TicketDetailDrawer 查看卡片详情，
+     * 避免不同账号因工单可见性差异看到残缺快照。
+     */
+    public TicketResponse queryByUidForCard(TicketRequest request) {
+        bindCurrentUserScope(request);
+        Optional<TicketEntity> ticketOptional = findByUid(request.getUid());
+        if (!ticketOptional.isPresent()) {
+            throw new NotFoundException("ticket not found");
+        }
+        TicketEntity ticket = ticketOptional.get();
+        if (StringUtils.hasText(request.getOrgUid()) && !request.getOrgUid().equals(ticket.getOrgUid())) {
+            throw new NotFoundException("ticket not found");
+        }
+        return convertToResponse(ticket);
+    }
+
+    /**
+     * 访客端按 uid 查询工单：
+     * 已认证访客仍走报告人可见性校验；匿名访客与列表接口（/visitor/api/v1/ticket/query，
+     * 匿名可按 reporterUid 查询完整工单数据）保持同等安全级别，直接返回。
+     * 否则访客端工单会话页（iframe 聊天页/宿主预取）均会收到 resource not found。
+     */
+    public TicketResponse queryByUidForVisitor(TicketRequest request) {
+        Optional<TicketEntity> ticketOptional = findByUid(request.getUid());
+        if (!ticketOptional.isPresent()) {
+            throw new NotFoundException("ticket not found");
+        }
+        TicketEntity ticket = ticketOptional.get();
+        UserEntity currentUser = authService.getUser();
+        if (currentUser != null && StringUtils.hasText(currentUser.getUid())) {
+            assertTicketVisible(ticket, isAdminChannelRequest(request));
+        }
+        return convertToResponse(ticket);
+    }
+
+    /**
+     * 按工单会话 uid 查询工单（threadUid 与 ticket 一对一）。
+     */
+    public TicketResponse queryByThreadUid(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+        Assert.hasText(request.getThreadUid(), "thread uid required");
+        bindCurrentUserScope(request);
+
+        Optional<TicketEntity> ticketOptional = ticketRepository
+                .findFirstByOrgUidAndThreadUidOrderByCreatedAtDesc(request.getOrgUid(), request.getThreadUid());
+        if (ticketOptional.isEmpty()) {
+            throw new NotFoundException("ticket not found");
+        }
+
+        TicketEntity ticket = ticketOptional.get();
+        assertTicketVisible(ticket, isAdminChannelRequest(request));
+        return convertToResponse(ticket);
+    }
+
+    /**
+     * 按工单会话 topic 查询工单（可能多条）。
+     */
+    public Page<TicketResponse> queryByThreadTopic(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+        Assert.hasText(request.getThreadTopic(), "thread topic required");
+
+        bindCurrentUserScope(request);
+        enrichVisibilityContext(request);
+        Pageable pageable = request.getPageable();
+        Page<TicketEntity> page = ticketRepository.findByOrgUidAndThreadTopic(request.getOrgUid(),
+            request.getThreadTopic(), pageable);
+        return filterVisiblePage(page, isAdminChannelRequest(request)).map(this::convertToResponse);
+    }
+
+    /**
+     * 按 visitorThreadUid 查询工单（可能多条，因为多个工单可绑定同一个访客会话）。
+     */
+    public Page<TicketResponse> queryByVisitorThreadUid(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+        Assert.hasText(request.getVisitorThreadUid(), "visitor thread uid required");
+
+        bindCurrentUserScope(request);
+        enrichVisibilityContext(request);
+        Pageable pageable = request.getPageable();
+        Page<TicketEntity> page = ticketRepository.findByOrgUidAndVisitorThreadUid(
+            request.getOrgUid(), request.getVisitorThreadUid(), pageable);
+        return filterVisiblePage(page, isAdminChannelRequest(request)).map(this::convertToResponse);
+    }
+
+    /**
+     * 按 visitorThreadTopic 查询工单（可能多条，因为多个工单可绑定同一个访客会话topic）。
+     */
+    public Page<TicketResponse> queryByVisitorThreadTopic(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+        Assert.hasText(request.getVisitorThreadTopic(), "visitor thread topic required");
+
+        bindCurrentUserScope(request);
+        enrichVisibilityContext(request);
+        Pageable pageable = request.getPageable();
+        Page<TicketEntity> page = ticketRepository.findByOrgUidAndVisitorThreadTopic(
+            request.getOrgUid(), request.getVisitorThreadTopic(), pageable);
+        return filterVisiblePage(page, isAdminChannelRequest(request)).map(this::convertToResponse);
+    }
+
+    @Transactional
+    @Override
+    public TicketResponse create(TicketRequest request) {
+        return createInternal(request, false);
+    }
+
+    @Transactional
+    public TicketResponse createVisitor(TicketRequest request) {
+        return createInternal(request, true);
+    }
+
+    private TicketResponse createInternal(TicketRequest request, boolean skipLoginEnforce) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+        normalizeReporterType(request, skipLoginEnforce);
+        Assert.hasText(request.getReporterJson(), "reporter info required");
+        // 创建工单...
+        TicketEntity ticket = modelMapper.map(request, TicketEntity.class);
+        ticket.setType(TicketTypeEnum.getNameFromValue(request.getType()));
+        // 工单生成方式：调用方（如自动建单）显式传入 AUTO；手动入口不传时默认 MANUAL
+        ticket.setCreateType(TicketCreateTypeEnum.getNameFromValue(request.getCreateType()));
+        ticket.setUid(uidUtils.getUid());
+        // 工单处理人/办理人：仅在确实传入 uid 时写入
+        boolean hasAssignee = false;
+        try {
+            hasAssignee = StringUtils.hasText(request.getAssigneeJson())
+                    && request.getAssignee() != null
+                    && StringUtils.hasText(request.getAssignee().getUid());
+        } catch (Exception ignore) {
+            hasAssignee = false;
+        }
+        ticket.setAssignee(hasAssignee ? request.getAssigneeJson() : BytedeskConsts.EMPTY_JSON_STRING);
+
+        // 工单创建人
+        ticket.setReporter(request.getReporterJson());
+
+        // 状态：创建时根据是否指定 assignee 进行初始化
+        ticket.setStatus(hasAssignee ? TicketStatusEnum.ASSIGNED.name() : TicketStatusEnum.NEW.name());
+        if (!StringUtils.hasText(ticket.getUserUid())) {
+            String reporterUid = resolveReporterUid(request);
+            if (StringUtils.hasText(reporterUid)) {
+                ticket.setUserUid(reporterUid);
+            }
+        }
+        // 校验工单分类：必须属于当前组织的组织级（level=ORGANIZATION）工单分类，
+        // 防止使用平台级/其他组织/已删除分类，导致 admin 端分类过滤失效与“未知分类”
+        sanitizeCategoryUid(ticket);
+        // 应用工单设置
+        TicketSettingsEntity settings = applyTicketSettings(ticket, request);
+        ensureTicketNumber(ticket, request, settings);
+        // 先保存工单
+        TicketEntity savedTicket = save(ticket);
+        // 保存附件
+        Set<TicketAttachmentEntity> attachments = new HashSet<>();
+        if (request.getUploadUids() != null) {
+            for (String uploadUid : request.getUploadUids()) {
+                Optional<UploadEntity> uploadOptional = uploadRestService.findByUid(uploadUid);
+                if (uploadOptional.isPresent()) {
+                    TicketAttachmentEntity attachment = new TicketAttachmentEntity();
+                    attachment.setUid(uidUtils.getUid());
+                    attachment.setOrgUid(savedTicket.getOrgUid());
+                    attachment.setTicket(savedTicket);
+                    attachment.setUpload(uploadOptional.get());
+                    attachmentRepository.save(attachment);
+                    //
+                    attachments.add(attachment);
+                }
+            }
+        }
+        savedTicket.setAttachments(attachments);
+
+        // 创建工单会话
+        ThreadEntity thread = createTicketThread(savedTicket);
+        if (thread != null) {
+            savedTicket.setThreadTopic(thread.getTopic());
+            savedTicket.setThreadUid(thread.getUid());
+        }
+
+        // 保存工单
+        savedTicket = save(savedTicket);
+        if (savedTicket == null) {
+            throw new RuntimeException("create ticket failed");
+        }
+
+        return convertToResponse(savedTicket);
+    }
+
+    @Transactional
+    @Override
+    public TicketResponse update(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getUid(), "ticket uid required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+
+        bindCurrentUserScope(request);
+
+        Optional<TicketEntity> ticketOptional = findByUid(request.getUid());
+        if (ticketOptional.isEmpty()) {
+            throw new NotFoundException("ticket not found");
+        }
+        TicketEntity ticket = ticketOptional.get();
+        assertTicketVisible(ticket, isAdminChannelRequest(request));
+        populateUpdateDefaults(request, ticket);
+        Assert.hasText(request.getReporterJson(), "reporter info required");
+
+        // 预先记录旧值，避免后续 setXXX 覆盖导致事件判断失效
+        final String oldAssigneeUid = (ticket.getAssignee() != null) ? ticket.getAssignee().getUid() : null;
+        final String oldDepartmentUid = ticket.getDepartmentUid();
+
+        // 更新基本信息
+        ticket.setTitle(request.getTitle());
+        ticket.setDescription(request.getDescription());
+        ticket.setPriority(request.getPriority());
+        ticket.setStatus(request.getStatus());
+        ticket.setEmail(request.getEmail());
+        ticket.setPhone(request.getPhone());
+        ticket.setWechat(request.getWechat());
+        ticket.setContactName(request.getContactName());
+
+        // 更新关联信息
+        ticket.setAssignee(request.getAssigneeJson());
+        ticket.setReporter(request.getReporterJson());
+        ticket.setDepartmentUid(request.getDepartmentUid());
+        ticket.setVisitorThreadUid(request.getVisitorThreadUid());
+        ticket.setVisitorThreadTopic(request.getVisitorThreadTopic());
+
+        // 处理附件更新
+        if (request.getUploadUids() != null) {
+            ticket = updateAttachments(ticket, request.getUploadUids());
+        }
+
+        // 关联工单会话，如果不存在则创建，兼容旧数据
+        // ThreadEntity thread = createTicketThread(ticket);
+        // if (thread != null) {
+        // ticket.setThreadTopic(thread.getTopic());
+        // ticket.setThreadUid(thread.getUid());
+        // }
+
+        // 保存更新后的工单
+        ticket = ticketRepository.save(ticket);
+        if (ticket == null) {
+            throw new RuntimeException("update ticket failed");
+        }
+
+        // 发布事件，判断assignee是否被修改
+        String newAssigneeUid = request.getAssigneeUid();
+        if (!StringUtils.hasText(newAssigneeUid) && request.getAssignee() != null) {
+            newAssigneeUid = request.getAssignee().getUid();
+        }
+        if (StringUtils.hasText(newAssigneeUid) && StringUtils.hasText(ticket.getAssigneeString())) {
+            if (oldAssigneeUid != null && !oldAssigneeUid.equals(newAssigneeUid)) {
+                TicketUpdateAssigneeEvent ticketUpdateAssigneeEvent = new TicketUpdateAssigneeEvent(ticket,
+                        oldAssigneeUid, newAssigneeUid);
+                applicationEventPublisher.publishEvent(ticketUpdateAssigneeEvent);
+            }
+        }
+
+        // 发布事件，判断departmentUid是否被修改
+        if (StringUtils.hasText(request.getDepartmentUid())) {
+            if (oldDepartmentUid != null && !oldDepartmentUid.equals(request.getDepartmentUid())) {
+                TicketUpdateDepartmentEvent TicketUpdateDepartmentEvent = new TicketUpdateDepartmentEvent(ticket,
+                        oldDepartmentUid, request.getDepartmentUid());
+                applicationEventPublisher.publishEvent(TicketUpdateDepartmentEvent);
+            }
+        }
+
+        return convertToResponse(ticket);
+    }
+
+    private void populateUpdateDefaults(TicketRequest request, TicketEntity ticket) {
+        Assert.notNull(request, "ticket request required");
+        Assert.notNull(ticket, "ticket entity required");
+
+        if (!StringUtils.hasText(request.getType())) {
+            request.setType(ticket.getType());
+        }
+        if (!StringUtils.hasText(request.getStatus())) {
+            request.setStatus(ticket.getStatus());
+        }
+        if (StringUtils.hasText(ticket.getReporterString())) {
+            request.setReporter(ticket.getReporter());
+        }
+    }
+
+    public TicketEntity updateAttachments(TicketEntity ticket, Set<String> uploadUids) {
+        // 获取现有附件的 uploadUid 列表
+        Set<String> existingUploadUids = ticket.getAttachments().stream()
+                .map(attachment -> attachment.getUpload().getUid())
+                .collect(Collectors.toSet());
+
+        // 处理新增的附件
+        for (String uploadUid : uploadUids) {
+            if (!existingUploadUids.contains(uploadUid)) {
+                Optional<UploadEntity> uploadOptional = uploadRestService.findByUid(uploadUid);
+                if (uploadOptional.isPresent()) {
+                    TicketAttachmentEntity attachment = new TicketAttachmentEntity();
+                    attachment.setUid(uidUtils.getUid());
+                    attachment.setTicket(ticket);
+                    attachment.setUpload(uploadOptional.get());
+                    attachmentRepository.save(attachment);
+                    // 添加到工单的附件集合中
+                    ticket.getAttachments().add(attachment);
+                }
+            }
+        }
+
+        // 处理需要删除的附件
+        ticket.getAttachments().stream()
+                .filter(attachment -> !uploadUids.contains(attachment.getUpload().getUid()))
+                .forEach(attachment -> {
+                    attachment.setDeleted(true);
+                    attachmentRepository.save(attachment);
+                });
+
+        return ticket;
+    }
+
+    /**
+     * 创建/获取工单会话。
+     * <p>
+     * 尝试绑定已有会话；否则走 topic 规则查找/创建。
+     */
+    public ThreadEntity createTicketThread(TicketEntity ticket) {
+        TicketTypeEnum ticketType = TicketTypeEnum.fromValue(ticket.getType());
+
+        // thread.user 赋值规则：
+        // - 外部工单：使用提交工单人信息(ticket.reporter)
+        // - 内部工单：同样使用 ticket.reporter（会话内的消息可通过 MessageExtra.visibility 区分可见范围）
+        String reporterUserJson = ticket.getReporterString();
+        if (!StringUtils.hasText(reporterUserJson)) {
+            reporterUserJson = BytedeskConsts.EMPTY_JSON_STRING;
+        }
+
+        // 优先用前端传入的 threadUid 绑定已有会话
+        if (StringUtils.hasText(ticket.getThreadUid())) {
+            // 只读独立事务加载游离实体：绑定会话仅需 uid/topic，避免源会话
+            // （如自动建单场景下刚关闭的访客会话，正被消息管线并发回写）
+            // 进入本创建事务的持久化上下文后，flush 时因版本冲突导致整个建单回滚
+            Optional<ThreadEntity> existingByUid = threadRestService.findByUidReadOnly(ticket.getThreadUid());
+            if (existingByUid.isPresent()) {
+                return existingByUid.get();
+            }
+        }
+
+        // internal(部门) -> external(工作组) -> org兜底
+        final String ticketUid = ticket.getUid();
+        String topic;
+        if (StringUtils.hasText(ticket.getDepartmentUid())) {
+            topic = TopicUtils.formatOrgDepartmentTicketThreadTopic(ticket.getDepartmentUid(), ticketUid);
+        } else if (StringUtils.hasText(ticket.getWorkgroupUid())) {
+            topic = TopicUtils.formatOrgWorkgroupTicketThreadTopic(ticket.getWorkgroupUid(), ticketUid);
+        } else if (StringUtils.hasText(ticket.getOrgUid())) {
+            topic = TopicUtils.formatOrgTicketThreadTopic(ticket.getOrgUid(), ticketUid);
+        } else {
+            throw new IllegalArgumentException("ticket thread topic requires departmentUid/workgroupUid/orgUid");
+        }
+
+        // 创建工单会话
+        ThreadEntity thread = ThreadEntity.builder()
+                .uid(uidUtils.getUid())
+                .type(ticketType == TicketTypeEnum.INTERNAL
+                        ? ThreadTypeEnum.TICKET_INTERNAL.name()
+                        : ThreadTypeEnum.TICKET_EXTERNAL.name())
+                .status(ThreadProcessStatusEnum.NEW.name())
+                .topic(topic)
+                // .hide(TicketTypeEnum.INTERNAL == ticketType) // 暂时不隐藏
+                .user(reporterUserJson)
+                // .userUid(owner.getUid())
+                // .owner(owner)
+                .channel(ticket.getChannel())
+                .orgUid(ticket.getOrgUid())
+                .build();
+        //
+        return threadRestService.save(thread);
+    }
+
+    @Override
+    protected TicketEntity doSave(TicketEntity entity) {
+        return ticketRepository.save(entity);
+    }
+
+    @Override
+    public TicketEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            TicketEntity entity) {
+        try {
+            Optional<TicketEntity> latest = findByUid(entity.getUid());
+            if (latest.isPresent()) {
+                TicketEntity latestEntity = latest.get();
+                // 合并需要保留的数据
+                latestEntity.setTitle(entity.getTitle());
+                latestEntity.setDescription(entity.getDescription());
+                latestEntity.setPriority(entity.getPriority());
+                latestEntity.setStatus(entity.getStatus());
+                // 其他需要合并的字段
+                return ticketRepository.save(latestEntity);
+            }
+        } catch (Exception ex) {
+            throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+        }
+        return null;
+    }
+
+    @Override
+    public void delete(TicketRequest request) {
+        bindCurrentUserScope(request);
+        deleteByUid(request.getUid());
+    }
+
+    @Override
+    public void deleteByUid(String uid) {
+        Optional<TicketEntity> ticketOptional = ticketRepository.findByUid(uid);
+        if (!ticketOptional.isPresent()) {
+            throw new NotFoundException("ticket not found");
+        }
+        TicketEntity ticket = ticketOptional.get();
+        assertTicketVisible(ticket);
+        ticket.setDeleted(true);
+        save(ticket);
+    }
+
+    public void deleteByVisitor(TicketRequest request) {
+        bindCurrentUserScope(request);
+        Optional<TicketEntity> ticketOptional = ticketRepository.findByUid(request.getUid());
+        if (!ticketOptional.isPresent()) {
+            throw new NotFoundException("ticket not found");
+        }
+        TicketEntity ticket = ticketOptional.get();
+        UserEntity currentUser = authService.getUser();
+        if (currentUser == null || !StringUtils.hasText(currentUser.getUid())
+                || !currentUser.getUid().equals(ticket.getUserUid())) {
+            throw new NotFoundException("ticket not found");
+        }
+        assertTicketVisible(ticket);
+        ticket.setDeleted(true);
+        save(ticket);
+    }
+
+    @Override
+    public TicketResponse convertToResponse(TicketEntity entity) {
+        TicketResponse response = TicketConvertUtils.convertToResponse(entity);
+        if (StringUtils.hasText(entity.getThreadUid())) {
+            long visitorUnreadCount = messageRepository.countVisitorUnreadByThreadUid(entity.getThreadUid());
+            response.setVisitorUnreadCount(Math.toIntExact(visitorUnreadCount));
+        } else {
+            response.setVisitorUnreadCount(0);
+        }
+        List<TicketSlaRecordResponse> slaRecords = ticketSlaRecordRepository
+                .findByTicketUidAndDeletedFalse(entity.getUid())
+                .stream()
+                .map(TicketSlaRecordResponse::fromEntity)
+                .sorted(Comparator.comparing(record -> record.getDueAt(), Comparator.nullsLast(Comparator.naturalOrder())))
+                .collect(Collectors.toList());
+        response.setSlaRecords(slaRecords);
+        return response;
+    }
+
+    public void initTicketCategory(String orgUid) {
+        log.info("initTicketCategory", orgUid);
+        List<CategoryTypeEnum> ticketCategoryTypes = List.of(CategoryTypeEnum.TICKET_INTERNAL,
+                CategoryTypeEnum.TICKET_EXTERNAL);
+        for (String category : TicketCategories.getAllCategories()) {
+            for (CategoryTypeEnum categoryType : ticketCategoryTypes) {
+                CategoryRequest categoryRequest = CategoryRequest.builder()
+                        .uid(Utils.formatUid(orgUid, categoryType.name() + "_" + category))
+                        .name(category)
+                        .order(0)
+                        .type(categoryType.name())
+                        .level(LevelEnum.ORGANIZATION.name())
+                        .platform(BytedeskConsts.PLATFORM_BYTEDESK)
+                        .orgUid(orgUid)
+                        .build();
+                categoryRestService.create(categoryRequest);
+            }
+        }
+    }
+
+    @Override
+    public TicketExcel convertToExcel(TicketEntity entity) {
+        TicketExcel excel = modelMapper.map(entity, TicketExcel.class);
+        // 处理人/报告人显示昵称，与前端 TicketTable 列显示保持一致
+        excel.setAssignee(resolveUserNickname(entity.getAssignee()));
+        excel.setReporter(resolveUserNickname(entity.getReporter()));
+        // 格式化时间戳为 yyyy-MM-dd HH:mm:ss，与前端 TicketTable 列显示保持一致
+        excel.setCreatedAt(entity.getCreatedAtString());
+        excel.setUpdatedAt(entity.getUpdatedAtString());
+        return excel;
+    }
+
+    /**
+     * 从工单关联的用户信息中提取昵称，无昵称时返回空字符串
+     */
+    private String resolveUserNickname(UserProtobuf userProtobuf) {
+        if (userProtobuf == null || !StringUtils.hasText(userProtobuf.getNickname())) {
+            return "";
+        }
+        return userProtobuf.getNickname();
+    }
+
+    @Override
+    protected Specification<TicketEntity> createSpecification(TicketRequest request) {
+        enrichVisibilityContext(request);
+        return TicketSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<TicketEntity> executePageQuery(Specification<TicketEntity> specification, Pageable pageable) {
+        return ticketRepository.findAll(specification, pageable);
+    }
+
+    public TicketStatusCountResponse countStatus(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        Assert.hasText(request.getOrgUid(), "organization uid required");
+
+        bindCurrentUserScope(request);
+        enrichVisibilityContext(request);
+
+        if (Boolean.TRUE.equals(request.getVisibilityRestricted())) {
+            Specification<TicketEntity> baseSpec = createSpecification(request);
+            long processing = ticketRepository
+                .count(baseSpec.and((root, query, cb) -> cb.equal(root.get("status"), TicketStatusEnum.PROCESSING.name())));
+            long pending = ticketRepository
+                .count(baseSpec.and((root, query, cb) -> cb.equal(root.get("status"), TicketStatusEnum.PENDING.name())));
+            long review = ticketRepository
+                .count(baseSpec.and((root, query, cb) -> cb.equal(root.get("status"), TicketStatusEnum.RESOLVED.name())));
+
+            return TicketStatusCountResponse.builder()
+                .processing(processing)
+                .pending(pending)
+                .review(review)
+                .build();
+        }
+
+        String orgUid = request.getOrgUid();
+        String workgroupUid = request.getWorkgroupUid();
+        String departmentUid = request.getDepartmentUid();
+
+        String processingStatus = TicketStatusEnum.PROCESSING.name();
+        String pendingStatus = TicketStatusEnum.PENDING.name();
+        String reviewStatus = TicketStatusEnum.RESOLVED.name();
+
+        long processing;
+        long pending;
+        long review;
+
+        if (StringUtils.hasText(workgroupUid)) {
+            processing = ticketRepository.countByOrgUidAndWorkgroupUidAndStatusAndDeletedFalse(orgUid, workgroupUid,
+                    processingStatus);
+            pending = ticketRepository.countByOrgUidAndWorkgroupUidAndStatusAndDeletedFalse(orgUid, workgroupUid,
+                    pendingStatus);
+            review = ticketRepository.countByOrgUidAndWorkgroupUidAndStatusAndDeletedFalse(orgUid, workgroupUid,
+                    reviewStatus);
+        } else if (StringUtils.hasText(departmentUid)) {
+            processing = ticketRepository.countByOrgUidAndDepartmentUidAndStatusAndDeletedFalse(orgUid, departmentUid,
+                    processingStatus);
+            pending = ticketRepository.countByOrgUidAndDepartmentUidAndStatusAndDeletedFalse(orgUid, departmentUid,
+                    pendingStatus);
+            review = ticketRepository.countByOrgUidAndDepartmentUidAndStatusAndDeletedFalse(orgUid, departmentUid,
+                    reviewStatus);
+        } else {
+            processing = ticketRepository.countByOrgUidAndStatusAndDeletedFalse(orgUid, processingStatus);
+            pending = ticketRepository.countByOrgUidAndStatusAndDeletedFalse(orgUid, pendingStatus);
+            review = ticketRepository.countByOrgUidAndStatusAndDeletedFalse(orgUid, reviewStatus);
+        }
+
+        return TicketStatusCountResponse.builder()
+                .processing(processing)
+                .pending(pending)
+                .review(review)
+                .build();
+    }
+
+    private Page<TicketEntity> filterVisiblePage(Page<TicketEntity> page, boolean adminPrivilege) {
+        List<TicketEntity> visible = page.getContent().stream()
+                .filter(ticket -> canViewTicket(ticket, adminPrivilege))
+                .collect(Collectors.toList());
+        return new PageImpl<>(visible, page.getPageable(), visible.size());
+    }
+
+    private void bindCurrentUserScope(TicketRequest request) {
+        if (request == null) {
+            return;
+        }
+        UserEntity currentUser = authService.getUser();
+        if (currentUser == null || !StringUtils.hasText(currentUser.getUid())) {
+            return;
+        }
+        if (!isVisitorPrincipal()) {
+            return;
+        }
+        request.setUserUid(currentUser.getUid());
+        request.setReporterUid(currentUser.getUid());
+        if (request.getReporter() != null) {
+            request.getReporter().setUid(currentUser.getUid());
+        }
+    }
+
+    private void enrichVisibilityContext(TicketRequest request) {
+        enrichVisibilityContext(request, isAdminChannelRequest(request));
+    }
+
+    /**
+     * allowAdminPrivilege=false：客服工作台视角（/query/workbench/org 专用），
+     * 服务端强制，无视请求 channel 与调用者角色，一律按可见性设置过滤；
+     * allowAdminPrivilege=true：管理后台视角（channel=WEB_ADMIN），行为与历史版本一致。
+     */
+    private void enrichVisibilityContext(TicketRequest request, boolean allowAdminPrivilege) {
+        if (request == null || !StringUtils.hasText(request.getOrgUid())) {
+            return;
+        }
+
+        // 权限上下文只能由服务端生成：先清理客户端可能携带的内部可见性字段（防伪造绕过）
+        clearClientVisibilityFields(request);
+
+        bindCurrentUserScope(request);
+
+        UserEntity currentUser = authService.getUser();
+        if (currentUser == null || !StringUtils.hasText(currentUser.getUid())) {
+            request.setVisibilityRestricted(false);
+            return;
+        }
+        request.setVisibilityCurrentUserUid(currentUser.getUid());
+
+        if (isVisitorPrincipal()) {
+            request.setVisibilityRestricted(false);
+            request.setVisibilityMode(TicketVisibilityModeEnum.ORG_WIDE.name());
+            return;
+        }
+
+        // 仅规范化客户端已传入的 type（如 internal -> INTERNAL），
+        // 不再为未传 type 的查询强制默认 EXTERNAL，否则会被 createSpecification
+        // 过滤为仅外部工单，导致内部 INTERNAL 工单无法出现在列表中
+        if (StringUtils.hasText(request.getType())) {
+            request.setType(TicketTypeEnum.fromValue(request.getType()).name());
+        }
+
+        if (allowAdminPrivilege && (Boolean.TRUE.equals(currentUser.isSuperUser())
+                || hasOrgAdminRole(currentUser))) {
+            // 管理后台（channel=WEB_ADMIN）：组织管理员/超级管理员不做可见性过滤，查看组织全部数据；
+            // superUser=true 时由查询规格进一步放开组织范围，查看平台所有数据
+            // （/query/workbench/org 传入 allowAdminPrivilege=false，管理员同样受限）
+            request.setVisibilityOrgAdmin(true);
+            request.setVisibilityRestricted(false);
+            request.setVisibilityMode(TicketVisibilityModeEnum.ORG_WIDE.name());
+            return;
+        }
+        // 客服工作台（desktop/mobile 等）：管理员无特权，与普通成员一样按可见性设置过滤
+        request.setVisibilityOrgAdmin(false);
+        memberRepository.findByUser_UidAndOrgUidAndDeletedFalse(currentUser.getUid(), request.getOrgUid())
+                .ifPresent(member -> {
+                    // 工单 userUid（报告人）/assignee JSON 存的是 member uid，需同时记录以便双口径匹配
+                    request.setVisibilityCurrentUserMemberUid(member.getUid());
+                    request.setVisibilityCurrentUserDepartmentUid(member.getDeptUid());
+                });
+
+        // G2 组合谓词：无 type 的混合列表查询（desktop「全部工单」）按工单类型分别加载
+        // INTERNAL/EXTERNAL 两份可见性设置，避免笼统按 EXTERNAL 设置过滤导致 INTERNAL 工单漏过/误伤；
+        // 有 ticketSettingsUid（按指定设置查询）时维持单设置路径
+        if (!StringUtils.hasText(request.getType()) && !StringUtils.hasText(request.getTicketSettingsUid())) {
+            TicketVisibilityQueryContext internalContext = loadVisibilityQueryContext(
+                    request.getOrgUid(), null, TicketTypeEnum.INTERNAL);
+            TicketVisibilityQueryContext externalContext = loadVisibilityQueryContext(
+                    request.getOrgUid(), null, TicketTypeEnum.EXTERNAL);
+            request.setVisibilityInternalContext(internalContext);
+            request.setVisibilityExternalContext(externalContext);
+            // 阶段1（缺口A）：同时按“工单自身绑定设置”分组过滤。一次性批量解析本组织工单引用的
+            // 全部设置 uid（含已解绑/软删除的历史引用），列表口径与详情 canViewTicket 对齐
+            Map<String, TicketVisibilityQueryContext> internalSettingsContexts = loadSettingsVisibilityContexts(
+                    request.getOrgUid(), TicketTypeEnum.INTERNAL);
+            Map<String, TicketVisibilityQueryContext> externalSettingsContexts = loadSettingsVisibilityContexts(
+                    request.getOrgUid(), TicketTypeEnum.EXTERNAL);
+            request.setVisibilityInternalSettingsContexts(internalSettingsContexts);
+            request.setVisibilityExternalSettingsContexts(externalSettingsContexts);
+            request.setVisibilityRestricted(isRestricted(internalContext, internalSettingsContexts)
+                    || isRestricted(externalContext, externalSettingsContexts));
+            return;
+        }
+
+        TicketVisibilitySettingsData visibilityData = resolveVisibilitySettingsData(request);
+        applyFlatVisibilityFields(request, visibilityData);
+
+        // 阶段1（缺口A）：单类型列表同样按“工单绑定设置”分组过滤（旧工单可能引用已解绑的自定义设置）。
+        // 显式 ticketSettingsUid 查询已由 resolveVisibilitySettingsData 按该设置解析，且
+        // Specification 会按该 uid 缩小结果集，无需再按引用设置分组
+        if (StringUtils.hasText(request.getType()) && !StringUtils.hasText(request.getTicketSettingsUid())) {
+            TicketTypeEnum ticketType = TicketTypeEnum.fromValue(request.getType());
+            Map<String, TicketVisibilityQueryContext> settingsContexts = loadSettingsVisibilityContexts(
+                    request.getOrgUid(), ticketType);
+            if (settingsContexts != null) {
+                if (TicketTypeEnum.INTERNAL.equals(ticketType)) {
+                    request.setVisibilityInternalSettingsContexts(settingsContexts);
+                } else {
+                    request.setVisibilityExternalSettingsContexts(settingsContexts);
+                }
+                request.setVisibilityRestricted(request.getVisibilityRestricted()
+                        || anyRestricted(settingsContexts));
+            }
+        }
+    }
+
+    /**
+     * 清理客户端可能携带的服务端内部可见性字段，保证权限上下文只能由服务端生成。
+     */
+    private void clearClientVisibilityFields(TicketRequest request) {
+        request.setVisibilityRestricted(null);
+        request.setVisibilityMode(null);
+        request.setVisibilityCurrentUserUid(null);
+        request.setVisibilityCurrentUserMemberUid(null);
+        request.setVisibilityCurrentUserDepartmentUid(null);
+        request.setVisibilityOrgAdmin(null);
+        request.setVisibilityAllowedDepartmentUids(new ArrayList<>());
+        request.setVisibilityRestrictedCategoryUids(new ArrayList<>());
+        request.setVisibilityRestrictedCategoryDepartmentUids(new HashMap<>());
+        request.setVisibilityInternalContext(null);
+        request.setVisibilityExternalContext(null);
+        request.setVisibilityInternalSettingsContexts(null);
+        request.setVisibilityExternalSettingsContexts(null);
+    }
+
+    /**
+     * 按工单类型批量加载“工单引用的设置 -> 可见性上下文”。
+     * 返回空 map 表示本组织该类型工单未引用任何设置（全部走默认回退分支），不返回 null。
+     */
+    private Map<String, TicketVisibilityQueryContext> loadSettingsVisibilityContexts(String orgUid,
+            TicketTypeEnum ticketType) {
+        List<String> referencedUids = ticketRepository
+                .findDistinctTicketSettingsUids(orgUid, ticketType.name());
+        List<String> settingsUids = referencedUids == null
+                ? List.of()
+                : referencedUids.stream().filter(StringUtils::hasText).distinct().collect(Collectors.toList());
+        if (settingsUids.isEmpty()) {
+            return new HashMap<>();
+        }
+        Map<String, TicketVisibilityQueryContext> contexts = new HashMap<>();
+        for (TicketSettingsEntity settings : ticketSettingsRestService.findByUidIn(settingsUids)) {
+            if (settings == null || !StringUtils.hasText(settings.getUid())) {
+                continue;
+            }
+            TicketVisibilitySettingsEntity visibilitySettings = settings.getVisibilitySettings();
+            TicketVisibilitySettingsData data = visibilitySettings == null
+                    || visibilitySettings.getContent() == null
+                            ? TicketVisibilitySettingsData.builder().build()
+                            : visibilitySettings.getContent();
+            contexts.put(settings.getUid(), buildVisibilityQueryContext(data));
+        }
+        return contexts;
+    }
+
+    private boolean isRestricted(TicketVisibilityQueryContext typeDefaultContext,
+            Map<String, TicketVisibilityQueryContext> settingsContexts) {
+        return (typeDefaultContext != null && typeDefaultContext.isRestricted())
+                || anyRestricted(settingsContexts);
+    }
+
+    private boolean anyRestricted(Map<String, TicketVisibilityQueryContext> settingsContexts) {
+        return settingsContexts != null
+                && settingsContexts.values().stream().anyMatch(context -> context != null && context.isRestricted());
+    }
+
+    /**
+     * 将单设置可见性数据写入请求的平铺字段（既有单类型路径行为，保持不变）。
+     */
+    private void applyFlatVisibilityFields(TicketRequest request, TicketVisibilitySettingsData visibilityData) {
+        request.setVisibilityMode(visibilityData.getMode());
+        request.setVisibilityAllowedDepartmentUids(visibilityData.getDepartmentUids() == null
+            ? new ArrayList<>()
+            : visibilityData.getDepartmentUids().stream()
+                .filter(StringUtils::hasText)
+                .collect(Collectors.toList()));
+        Map<String, List<String>> departmentRestrictedCategories = new HashMap<>();
+        request.setVisibilityRestrictedCategoryUids(visibilityData.getCategoryRules().stream()
+            .filter(rule -> TicketVisibilityModeEnum.DEPARTMENT_RESTRICTED.name().equals(rule.getVisibility()))
+                .map(rule -> rule.getCategoryUid())
+                .filter(StringUtils::hasText)
+                .collect(Collectors.toList()));
+        visibilityData.getCategoryRules().stream()
+                .filter(rule -> TicketVisibilityModeEnum.DEPARTMENT_BASED.name().equals(rule.getVisibility())
+                        && StringUtils.hasText(rule.getCategoryUid()))
+                .forEach(rule -> {
+                    List<String> departmentUids = rule.getDepartmentUids() == null
+                            ? new ArrayList<>()
+                            : rule.getDepartmentUids().stream()
+                                    .filter(StringUtils::hasText)
+                                    .collect(Collectors.toList());
+                    if (!departmentUids.isEmpty()) {
+                        departmentRestrictedCategories.put(rule.getCategoryUid(), departmentUids);
+                    }
+                });
+        request.setVisibilityRestrictedCategoryDepartmentUids(departmentRestrictedCategories);
+        request.setVisibilityRestricted(!TicketVisibilityModeEnum.ORG_WIDE.name().equals(visibilityData.getMode()));
+    }
+
+    /**
+     * 是否为管理后台来源请求（channel=WEB_ADMIN）。
+     * 管理员可见性特权（组织管理员/超级管理员全见）仅在管理后台生效；
+     * desktop 等客服工作台渠道中，管理员同样按 ticketsettings 可见性设置过滤。
+     */
+    private boolean isAdminChannelRequest(TicketRequest request) {
+        return request != null && ChannelEnum.WEB_ADMIN.name().equalsIgnoreCase(request.getChannel());
+    }
+
+    /**
+     * G2：按指定类型加载可见性查询上下文（发布版设置），供无 type 混合列表的组合谓词使用。
+     */
+    private TicketVisibilityQueryContext loadVisibilityQueryContext(String orgUid, String ticketSettingsUid,
+            TicketTypeEnum ticketType) {
+        TicketVisibilitySettingsEntity visibilitySettings = null;
+        if (StringUtils.hasText(ticketSettingsUid)) {
+            visibilitySettings = ticketSettingsRestService.findByUid(ticketSettingsUid)
+                    .map(settings -> settings.getVisibilitySettings())
+                    .orElse(null);
+        }
+        if (visibilitySettings == null) {
+            visibilitySettings = ticketSettingsRestService
+                    .findDefaultByOrgUidAndType(orgUid, ticketType.name())
+                    .map(settings -> settings.getVisibilitySettings())
+                    .orElse(null);
+        }
+        TicketVisibilitySettingsData data = visibilitySettings == null || visibilitySettings.getContent() == null
+                ? TicketVisibilitySettingsData.builder().build()
+                : visibilitySettings.getContent();
+        return buildVisibilityQueryContext(data);
+    }
+
+    /**
+     * 由已发布的可见性设置数据构建查询上下文（规范化 + 受限分类提取）。
+     */
+    private TicketVisibilityQueryContext buildVisibilityQueryContext(TicketVisibilitySettingsData data) {
+        data.normalize();
+
+        List<String> allowedDepartmentUids = data.getDepartmentUids() == null
+            ? new ArrayList<>()
+            : data.getDepartmentUids().stream()
+                .filter(StringUtils::hasText)
+                .collect(Collectors.toList());
+
+        List<String> restrictedCategoryUids = data.getCategoryRules().stream()
+                .filter(rule -> TicketVisibilityModeEnum.DEPARTMENT_RESTRICTED.name().equals(rule.getVisibility()))
+                .map(rule -> rule.getCategoryUid())
+                .filter(StringUtils::hasText)
+                .collect(Collectors.toList());
+        Map<String, List<String>> departmentBasedCategories = new HashMap<>();
+        data.getCategoryRules().stream()
+                .filter(rule -> TicketVisibilityModeEnum.DEPARTMENT_BASED.name().equals(rule.getVisibility())
+                        && StringUtils.hasText(rule.getCategoryUid()))
+                .forEach(rule -> {
+                    List<String> departmentUids = rule.getDepartmentUids() == null
+                            ? new ArrayList<>()
+                            : rule.getDepartmentUids().stream()
+                                    .filter(StringUtils::hasText)
+                                    .collect(Collectors.toList());
+                    if (!departmentUids.isEmpty()) {
+                        departmentBasedCategories.put(rule.getCategoryUid(), departmentUids);
+                    }
+                });
+        return TicketVisibilityQueryContext.builder()
+                .mode(data.getMode())
+                .restricted(!TicketVisibilityModeEnum.ORG_WIDE.name().equals(data.getMode()))
+            .allowedDepartmentUids(allowedDepartmentUids)
+                .restrictedCategoryUids(restrictedCategoryUids)
+                .restrictedCategoryDepartmentUids(departmentBasedCategories)
+                .build();
+    }
+
+    private TicketVisibilitySettingsData resolveVisibilitySettingsData(TicketRequest request) {
+        TicketVisibilitySettingsEntity visibilitySettings = null;
+        if (StringUtils.hasText(request.getTicketSettingsUid())) {
+            visibilitySettings = ticketSettingsRestService.findByUid(request.getTicketSettingsUid())
+                    .map(settings -> settings.getVisibilitySettings())
+                    .orElse(null);
+        }
+        if (visibilitySettings == null) {
+            TicketTypeEnum ticketType = TicketTypeEnum.fromValue(request.getType());
+            visibilitySettings = ticketSettingsRestService
+                .findDefaultByOrgUidAndType(request.getOrgUid(), ticketType.name())
+                    .map(settings -> settings.getVisibilitySettings())
+                    .orElse(null);
+        }
+
+        TicketVisibilitySettingsData data = visibilitySettings == null || visibilitySettings.getContent() == null
+                ? TicketVisibilitySettingsData.builder().build()
+                : visibilitySettings.getContent();
+        data.normalize();
+        return data;
+    }
+
+    private boolean hasOrgAdminRole(UserEntity currentUser) {
+        return currentUser.getCurrentRoles() != null && currentUser.getCurrentRoles().stream()
+                .filter(role -> role != null)
+                .anyMatch(role -> RoleConsts.ROLE_ADMIN.equals(role.getName())
+                        || RoleConsts.ROLE_ADMIN.equals(role.getValue())
+                        || RoleConsts.ROLE_SUPER.equals(role.getName())
+                        || RoleConsts.ROLE_SUPER.equals(role.getValue()));
+    }
+
+    public void assertTicketVisible(TicketEntity ticket) {
+        // 无请求上下文的调用万默认保留管理员特权（既有契约）
+        assertTicketVisible(ticket, true);
+    }
+
+    public void assertTicketVisible(TicketEntity ticket, boolean adminPrivilege) {
+        if (!canViewTicket(ticket, adminPrivilege)) {
+            throw new NotFoundException("ticket not found");
+        }
+    }
+
+    /**
+     * 工单卡片分享只读豁免：常规可见性未通过时，若查看者订阅的会话中
+     * 确实存在引用该工单的 TICKET 卡片消息，则放行只读详情查看。
+     * <p>
+     * 场景：客服把工单卡片发送到会话中分享，会话成员点开卡片查看详情时，
+     * 不应被工单可见性设置拦截（列表可见性过滤保持不变，此处仅为只读豁免，
+     * 不放开工作流操作等写路径）。
+     */
+    public void assertTicketVisibleOrSharedCard(TicketEntity ticket, boolean adminPrivilege, String sharedThreadUid) {
+        if (canViewTicket(ticket, adminPrivilege)) {
+            return;
+        }
+        if (canViewTicketViaSharedCard(ticket, sharedThreadUid)) {
+            return;
+        }
+        throw new NotFoundException("ticket not found");
+    }
+
+    /**
+     * 判定当前用户是否可通过“工单卡片分享”查看工单：
+     * 1. 指定了卡片所在会话 uid（sharedThreadUid）且该会话存在；
+     * 2. 会话与工单属于同一组织（防止跨组织伪造）；
+     * 3. 当前用户订阅了该会话；
+     * 4. 该会话中确实存在引用此工单的 TICKET 卡片消息（防止伪造 threadUid 越权查看任意工单）。
+     */
+    private boolean canViewTicketViaSharedCard(TicketEntity ticket, String sharedThreadUid) {
+        if (ticket == null || !StringUtils.hasText(sharedThreadUid) || !StringUtils.hasText(ticket.getUid())) {
+            return false;
+        }
+        UserEntity currentUser = authService.getUser();
+        if (currentUser == null || !StringUtils.hasText(currentUser.getUid())) {
+            return false;
+        }
+        if (isVisitorPrincipal()) {
+            return false;
+        }
+        Optional<ThreadEntity> threadOptional = threadRestService.findByUid(sharedThreadUid);
+        if (threadOptional.isEmpty()) {
+            return false;
+        }
+        ThreadEntity thread = threadOptional.get();
+        if (!ticket.getOrgUid().equals(thread.getOrgUid())) {
+            return false;
+        }
+        if (!topicSubscriptionRepository.existsByUserUidAndTopicAndDeletedFalse(currentUser.getUid(), thread.getTopic())) {
+            return false;
+        }
+        return messageRepository.existsByThread_UidAndTypeAndContentContainingAndDeletedFalse(
+                sharedThreadUid,
+                MessageTypeEnum.TICKET.name(),
+                "\"uid\":\"" + ticket.getUid() + "\"");
+    }
+
+    public void assertTicketVisibleIfAuthenticated(TicketEntity ticket) {
+        assertTicketVisibleIfAuthenticated(ticket, true);
+    }
+
+    public void assertTicketVisibleIfAuthenticated(TicketEntity ticket, boolean adminPrivilege) {
+        UserEntity currentUser = authService.getUser();
+        if (currentUser == null || !StringUtils.hasText(currentUser.getUid())) {
+            return;
+        }
+        assertTicketVisible(ticket, adminPrivilege);
+    }
+
+    // private boolean canViewTicket(TicketEntity ticket) {
+    //     return canViewTicket(ticket, true);
+    // }
+
+    private boolean canViewTicket(TicketEntity ticket, boolean adminPrivilege) {
+        if (ticket == null) {
+            return false;
+        }
+
+        UserEntity currentUser = authService.getUser();
+        if (currentUser == null || !StringUtils.hasText(currentUser.getUid())) {
+            return false;
+        }
+        if (adminPrivilege && (Boolean.TRUE.equals(currentUser.isSuperUser()) || hasOrgAdminRole(currentUser))) {
+            // 管理员特权仅在管理后台（channel=WEB_ADMIN）生效；客服工作台中管理员同样受可见性限制
+            return true;
+        }
+        if (currentUser.getUid().equals(ticket.getUserUid())) {
+            return true;
+        }
+
+        // 工单 userUid（报告人为成员时）与 assignee JSON 存的是 member uid，与 user uid 不同：
+        // 先查当前用户对应的组织成员，双口径匹配报告人/受理人，避免“处理人看不到自己被分配的工单”
+        String currentMemberUid = null;
+        String currentDeptUid = null;
+        if (!isVisitorPrincipal()) {
+            var memberOptional = memberRepository
+                    .findByUser_UidAndOrgUidAndDeletedFalse(currentUser.getUid(), ticket.getOrgUid());
+            if (memberOptional.isPresent()) {
+                currentMemberUid = memberOptional.get().getUid();
+                currentDeptUid = memberOptional.get().getDeptUid();
+            }
+        }
+        if (currentMemberUid != null && currentMemberUid.equals(ticket.getUserUid())) {
+            return true;
+        }
+        if (StringUtils.hasText(ticket.getAssigneeString())) {
+            String assigneeJson = ticket.getAssigneeString();
+            if (assigneeJson.contains("\"uid\":\"" + currentUser.getUid() + "\"")) {
+                return true;
+            }
+            if (currentMemberUid != null && assigneeJson.contains("\"uid\":\"" + currentMemberUid + "\"")) {
+                return true;
+            }
+        }
+
+        if (isVisitorPrincipal()) {
+            return false;
+        }
+        TicketRequest visibilityRequest = TicketRequest.builder()
+            .ticketSettingsUid(ticket.getTicketSettingsUid())
+            .build();
+        visibilityRequest.setOrgUid(ticket.getOrgUid());
+        visibilityRequest.setType(ticket.getType());
+        TicketVisibilitySettingsData data = resolveVisibilitySettingsData(visibilityRequest);
+
+        if (TicketVisibilityModeEnum.DEPARTMENT_RESTRICTED.name().equals(data.getMode())) {
+            if (!StringUtils.hasText(ticket.getDepartmentUid())) {
+                return true;
+            }
+            return StringUtils.hasText(currentDeptUid) && ticket.getDepartmentUid().equals(currentDeptUid);
+        }
+        if (TicketVisibilityModeEnum.DEPARTMENT_BASED.name().equals(data.getMode())) {
+            List<String> allowedDepartmentUids = data.getDepartmentUids() == null
+                    ? new ArrayList<>()
+                    : data.getDepartmentUids();
+            return StringUtils.hasText(currentDeptUid) && allowedDepartmentUids.contains(currentDeptUid);
+        }
+        if (TicketVisibilityModeEnum.CATEGORY_BASED.name().equals(data.getMode())) {
+            // 与列表谓词（appendVisibilityPredicates）保持同口径：
+            // 未填写分类的工单无法套用分类规则，存在受限规则时默认收紧为仅创建人/受理人/管理员可见
+            //（reporter/assignee/管理员已在方法前部放行，此处 return false 仅拦截其他普通成员）。
+            boolean hasRestrictingCategoryRule = data.getCategoryRules() != null
+                    && data.getCategoryRules().stream()
+                            .anyMatch(rule -> rule != null
+                                    && !TicketVisibilityModeEnum.ORG_WIDE.name().equals(rule.getVisibility()));
+            if (!StringUtils.hasText(ticket.getCategoryUid()) && hasRestrictingCategoryRule) {
+                return false;
+            }
+            String categoryVisibility = data.resolveCategoryVisibility(ticket.getCategoryUid());
+            if (TicketVisibilityModeEnum.DEPARTMENT_RESTRICTED.name().equals(categoryVisibility)) {
+                if (!StringUtils.hasText(ticket.getDepartmentUid())) {
+                    return true;
+                }
+                return StringUtils.hasText(currentDeptUid) && ticket.getDepartmentUid().equals(currentDeptUid);
+            }
+            if (TicketVisibilityModeEnum.DEPARTMENT_BASED.name().equals(categoryVisibility)) {
+                List<String> allowedDepartmentUids = data.resolveCategoryDepartmentUids(ticket.getCategoryUid());
+                return StringUtils.hasText(currentDeptUid) && allowedDepartmentUids.contains(currentDeptUid);
+            }
+        }
+
+        if (!TicketTypeEnum.INTERNAL.name().equals(ticket.getType())
+                && TicketVisibilityModeEnum.ORG_WIDE.name().equals(data.getMode())) {
+            return true;
+        }
+        return true;
+    }
+
+    /**
+     * 确保工单已分配唯一的 ticketNumber。
+     * <p>
+     * 该方法会直接对入参 {@code ticket} 进行赋值：当生成到可用号码后，调用
+     * {@code ticket.setTicketNumber(...)} 并返回。
+     * <p>
+     * 生成规则：
+     * <ul>
+     * <li>组织范围：优先使用 {@code request.orgUid}，为空则回退到
+     * {@code BytedeskConsts.DEFAULT_ORGANIZATION_UID}</li>
+     * <li>前缀：优先使用 {@code settings.basicSettings.numberPrefix}（trim + upper），否则默认
+     * {@code TK}</li>
+     * <li>长度：优先使用 {@code settings.basicSettings.numberLength}（需大于前缀长度），否则默认前缀长度 +
+     * 8；
+     * 数字部分长度最终限制在 [4, 32]</li>
+     * <li>唯一性：最多尝试 5 次（prefix + 数字段），若仍冲突则使用 fallback（prefix + 完整 uid）再尝试 3 次</li>
+     * </ul>
+     *
+     * @param ticket   需要写入 ticketNumber 的工单实体
+     * @param request  工单请求（用于 orgUid 等上下文）
+     * @param settings 工单设置（用于号码前缀/长度配置）
+     * @throws IllegalStateException 当多次尝试后仍无法分配到唯一号码时抛出
+     */
+    private void ensureTicketNumber(TicketEntity ticket, TicketRequest request, TicketSettingsEntity settings) {
+        Assert.notNull(ticket, "ticket required");
+        Assert.notNull(request, "ticket request required");
+        Assert.notNull(settings, "ticket settings required");
+
+        String orgUid = request.getOrgUid();
+        String scopedOrgUid = StringUtils.hasText(orgUid) ? orgUid : BytedeskConsts.DEFAULT_ORGANIZATION_UID;
+
+        TicketBasicSettingsEntity basicSettings = settings.getBasicSettings();
+
+        String prefix = "TK";
+        if (basicSettings != null && StringUtils.hasText(basicSettings.getNumberPrefix())) {
+            prefix = basicSettings.getNumberPrefix().trim().toUpperCase();
+        }
+
+        int prefixLength = StringUtils.hasText(prefix) ? prefix.length() : 0;
+        Integer configuredLength = basicSettings != null ? basicSettings.getNumberLength() : null;
+        int totalLength = (configuredLength != null && configuredLength > prefixLength)
+                ? configuredLength
+                : prefixLength + 8;
+        int numericLength = totalLength - prefixLength;
+        numericLength = Math.max(numericLength, 4);
+        numericLength = Math.min(numericLength, 32);
+
+        for (int i = 0; i < 5; i++) {
+            String raw = uidUtils.getUid();
+            String numericPart;
+            if (numericLength <= 0) {
+                numericPart = raw;
+            } else if (raw.length() > numericLength) {
+                numericPart = raw.substring(raw.length() - numericLength);
+            } else {
+                StringBuilder builder = new StringBuilder();
+                for (int j = raw.length(); j < numericLength; j++) {
+                    builder.append('0');
+                }
+                builder.append(raw);
+                numericPart = builder.toString();
+            }
+
+            String candidate = prefix + numericPart;
+            if (!ticketRepository.existsByOrgUidAndTicketNumber(scopedOrgUid, candidate)) {
+                ticket.setTicketNumber(candidate);
+                return;
+            }
+        }
+
+        for (int i = 0; i < 3; i++) {
+            String candidate = prefix + uidUtils.getUid();
+            if (!ticketRepository.existsByOrgUidAndTicketNumber(scopedOrgUid, candidate)) {
+                ticket.setTicketNumber(candidate);
+                return;
+            }
+        }
+
+        throw new IllegalStateException("Unable to allocate unique ticket number for org " + scopedOrgUid);
+    }
+
+    /**
+     * 工单分类校验：categoryUid 必须指向本组织 level=ORGANIZATION 且类型匹配的工单分类，
+     * 否则置空（不阻断工单创建），避免脏分类引用流入列表/过滤。
+     */
+    private void sanitizeCategoryUid(TicketEntity ticket) {
+        if (!StringUtils.hasText(ticket.getCategoryUid())) {
+            return;
+        }
+        String categoryUid = ticket.getCategoryUid();
+        String expectedType = resolveTicketCategoryTypeName(ticket.getType());
+        Optional<CategoryEntity> categoryOpt = categoryRestService.findByUid(categoryUid);
+        boolean valid = false;
+        if (categoryOpt.isPresent()) {
+            CategoryEntity category = categoryOpt.get();
+            valid = !category.isDeleted()
+                    && LevelEnum.ORGANIZATION.name().equals(category.getLevel())
+                    && ticket.getOrgUid().equals(category.getOrgUid())
+                    && expectedType.equals(category.getType());
+        }
+        if (!valid) {
+            log.warn("invalid ticket categoryUid ignored: categoryUid={}, orgUid={}, ticketType={}",
+                    categoryUid, ticket.getOrgUid(), ticket.getType());
+            ticket.setCategoryUid(null);
+        }
+    }
+
+    private String resolveTicketCategoryTypeName(String ticketType) {
+        TicketTypeEnum type = TicketTypeEnum.fromValue(ticketType);
+        if (TicketTypeEnum.INTERNAL.equals(type)) {
+            return CategoryTypeEnum.TICKET_INTERNAL.name();
+        }
+        return CategoryTypeEnum.TICKET_EXTERNAL.name();
+    }
+
+    private TicketSettingsEntity applyTicketSettings(TicketEntity ticket, TicketRequest request) {
+        Assert.notNull(ticket, "ticket required");
+        Assert.notNull(request, "ticket request required");
+
+        TicketSettingsEntity settings;
+        if (StringUtils.hasText(request.getTicketSettingsUid())) {
+            settings = ticketSettingsRestService.findByUid(request.getTicketSettingsUid())
+                    .orElseThrow(() -> new NotFoundException(
+                            "ticket settings not found: " + request.getTicketSettingsUid()));
+        } else if (TicketTypeEnum.EXTERNAL.name().equals(ticket.getType())
+            && StringUtils.hasText(ticket.getWorkgroupUid())) {
+            settings = ticketSettingsRestService.resolveEntityByWorkgroup(
+                request.getOrgUid(),
+                ticket.getWorkgroupUid(),
+                request.getType());
+            request.setTicketSettingsUid(settings.getUid());
+        } else {
+            settings = ticketSettingsRestService.getOrCreateDefault(request.getOrgUid(), request.getType());
+            request.setTicketSettingsUid(settings.getUid());
+        }
+        ticket.setTicketSettingsUid(settings.getUid());
+
+        // 优先使用前端明确传入的流程 UID（便于草稿流程/自定义流程创建工单）
+        if (StringUtils.hasText(request.getProcessEntityUid())) {
+            ticket.setProcessEntityUid(request.getProcessEntityUid());
+        } else {
+            ProcessEntity process = settings.getProcess();
+            if (process != null) {
+                // processEntityUid 同时作为 Flowable 的 processDefinitionKey
+                ticket.setProcessEntityUid(process.getUid());
+            }
+        }
+
+        FormEntity form = settings.getForm();
+        if (form != null) {
+            ticket.setFormEntityUid(form.getUid());
+        }
+
+        return settings;
+    }
+
+    private String resolveReporterUid(TicketRequest request) {
+        Assert.notNull(request, "ticket request required");
+        UserEntity currentUser = authService.getUser();
+        if (currentUser != null
+                && StringUtils.hasText(currentUser.getUid())
+                && isVisitorPrincipal()) {
+            return currentUser.getUid();
+        }
+        if (StringUtils.hasText(request.getReporterUid())) {
+            return request.getReporterUid();
+        }
+        UserProtobuf reporter = request.getReporter();
+        if (reporter != null && StringUtils.hasText(reporter.getUid())) {
+            return reporter.getUid();
+        }
+        return null;
+    }
+
+    /**
+     * 创建工单时强制 reporter.type。
+     * <ul>
+     * <li>外部工单（登录用户）：USER</li>
+     * <li>外部工单（匿名访客）：VISITOR</li>
+     * <li>内部工单：MEMBER</li>
+     * </ul>
+     * 为兼容旧客户端：当未传 type 时自动补齐；当传入 type 与期望不一致时直接拒绝。
+     */
+    private void normalizeReporterType(TicketRequest request, boolean skipLoginEnforce) {
+        UserProtobuf reporter = request.getReporter();
+        Assert.notNull(reporter, "reporter required");
+        Assert.hasText(reporter.getUid(), "reporter.uid required");
+
+        TicketTypeEnum ticketType = TicketTypeEnum.fromValue(request.getType());
+        String expectedType;
+        if (ticketType == TicketTypeEnum.INTERNAL) {
+            expectedType = UserTypeEnum.MEMBER.name();
+        } else {
+            expectedType = skipLoginEnforce ? UserTypeEnum.VISITOR.name() : UserTypeEnum.USER.name();
+        }
+
+        if (!StringUtils.hasText(reporter.getType())) {
+            reporter.setType(expectedType);
+            return;
+        }
+
+        if (!expectedType.equalsIgnoreCase(reporter.getType())) {
+            throw new IllegalArgumentException(
+                    "invalid reporter.type: expected " + expectedType + ", actual " + reporter.getType());
+        }
+    }
+
+    private boolean isVisitorPrincipal() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        Object principal = authentication.getPrincipal();
+        if (principal instanceof UserDetailsImpl userDetails) {
+            return ChannelEnum.WEB_VISITOR.name().equalsIgnoreCase(userDetails.getChannel());
+        }
+        return false;
+    }
+
+}

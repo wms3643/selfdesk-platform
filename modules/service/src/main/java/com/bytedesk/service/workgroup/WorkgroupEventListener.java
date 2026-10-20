@@ -1,0 +1,82 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-12 07:20:15
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-06-09 10:07:26
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.workgroup;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.rbac.organization.OrganizationEntity;
+import com.bytedesk.core.rbac.organization.event.OrganizationCreateEvent;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.service.agent.AgentEntity;
+import com.bytedesk.service.agent.AgentRestService;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Component
+@AllArgsConstructor
+public class WorkgroupEventListener {
+
+    private final AgentRestService agentRestService;
+    
+    private final WorkgroupRestService workgroupRestService;
+
+    private final UidUtils uidUtils;
+
+    @Order(7)
+    @EventListener
+    public void onOrganizationCreateEvent(OrganizationCreateEvent event) {
+        OrganizationEntity organization = (OrganizationEntity) event.getSource();
+        UserEntity user = organization.getUser();
+        String orgUid = organization.getUid();
+        if (workgroupRestService.findAnyByOrgUid(orgUid).isPresent()) {
+            return;
+        }
+        // 创建默认workgroup
+        log.info("workgroup - organization created: {}", organization.getName());
+
+        List<String> agentUids = new ArrayList<>();
+        String mobile = user.getMobile();
+        if (StringUtils.hasText(mobile)) {
+            Optional<AgentEntity> agentOptional = agentRestService.findByMobileAndOrgUid(mobile, orgUid);
+            agentOptional.ifPresent(agent -> agentUids.add(agent.getUid()));
+        } else {
+            String email = user.getEmail();
+            if (StringUtils.hasText(email)) {
+                Optional<AgentEntity> agentOptional = agentRestService.findByEmailAndOrgUid(email, orgUid);
+                agentOptional.ifPresent(agent -> agentUids.add(agent.getUid()));
+            } else {
+                log.warn("workgroup - skip agent lookup, mobile/email empty for org {}", orgUid);
+            }
+        }
+        // 
+        // add workgroups
+        WorkgroupRequest workgroupRequest = WorkgroupRequest.builder()
+                .uid(uidUtils.getUid())
+                .nickname("SelfDesk 智能客服")
+                .description("SelfDesk 智能客服中心")
+                .agentUids(agentUids)
+                .orgUid(orgUid)
+                .build();
+        workgroupRestService.create(workgroupRequest);
+    }
+
+}

@@ -1,0 +1,907 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:20:17
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-20 20:57:04
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.organization;
+
+import java.util.Objects;
+import java.util.List;
+import java.util.Optional;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.base.BaseRestService;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.exception.CommonI18nExceptions;
+import com.bytedesk.core.enums.LevelEnum;
+import com.bytedesk.core.exception.OrganizationI18nExceptions;
+import com.bytedesk.core.exception.ResourceI18nExceptions;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.organization.event.OrganizationAdminTransferEvent;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserService;
+import com.bytedesk.core.member.MemberRestService;
+import com.bytedesk.core.uid.UidUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import com.bytedesk.core.rbac.user.UserResponse;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class OrganizationRestService extends BaseRestService<OrganizationEntity, OrganizationRequest, OrganizationResponse> {
+
+    private final AuthService authService;
+
+    private final UserService userService;
+
+    private final OrganizationRepository organizationRepository;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    private final UidUtils uidUtils;
+
+    private final ModelMapper modelMapper;
+
+    private final CacheManager cacheManager;
+
+    /** 同步事件发布器：AFTER_COMMIT 事件必须在事务内同步发布，不能走 @Async 的 BytedeskEventPublisher */
+    private final ApplicationEventPublisher applicationEventPublisher;
+
+    /** 延迟注入避免循环依赖：MemberRestService 依赖 OrganizationRestService */
+    private final ObjectProvider<MemberRestService> memberRestServiceProvider;
+
+    private void evictOrganizationCache() {
+        Cache cache = cacheManager.getCache("organization");
+        if (cache != null) {
+            cache.clear();
+        }
+    }
+
+    private int resolveDefaultVipLevel() {
+        return OrganizationDefaults.resolveDefaultVipLevel(bytedeskProperties);
+    }
+
+    private void applyDefaultVipSettings(OrganizationEntity organization) {
+        int defaultVipLevel = resolveDefaultVipLevel();
+        organization.setVipLevel(defaultVipLevel);
+        organization.setVipExpireDate(OrganizationDefaults.resolveDefaultVipExpireDate(bytedeskProperties, defaultVipLevel));
+    }
+
+    private void applyOrganizationLimitsDefaults(OrganizationEntity organization) {
+        if (organization.getMaxMembers() == null) {
+            organization.setMaxMembers(resolveDefaultMaxMembers());
+        }
+        if (organization.getMaxAgents() == null) {
+            organization.setMaxAgents(resolveDefaultMaxAgents());
+        }
+        if (organization.getMaxWorkgroups() == null) {
+            organization.setMaxWorkgroups(resolveDefaultMaxWorkgroups());
+        }
+        if (organization.getVipExpireLoginCheckEnabled() == null) {
+            organization.setVipExpireLoginCheckEnabled(false);
+        }
+        if (organization.getVipLevel() == null) {
+            organization.setVipLevel(Boolean.TRUE.equals(organization.getVip()) ? 1 : 0);
+        }
+    }
+
+    private int resolveDefaultMaxMembers() {
+        Integer configured = bytedeskProperties.getOrganization().getDefaultMaxMembers();
+        if (configured == null || configured <= 0) {
+            return 20;
+        }
+        return configured;
+    }
+
+    private int resolveDefaultMaxAgents() {
+        Integer configured = bytedeskProperties.getOrganization().getDefaultMaxAgents();
+        if (configured == null || configured <= 0) {
+            return 20;
+        }
+        return configured;
+    }
+
+    private int resolveDefaultMaxWorkgroups() {
+        Integer configured = bytedeskProperties.getOrganization().getDefaultMaxWorkgroups();
+        if (configured == null || configured <= 0) {
+            return 20;
+        }
+        return configured;
+    }
+
+    private boolean isPlatformSuper(UserEntity user) {
+        if (user == null) {
+            return false;
+        }
+        return user.isSuperUser();
+    }
+
+    private void assertOwnerOrPrivileged(OrganizationEntity organization) {
+        UserEntity authUser = authService.getUser();
+        if (authUser == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+        if (isPlatformSuper(authUser)) {
+            return;
+        }
+        if (organization.getUser() == null || !authUser.getUid().equals(organization.getUser().getUid())) {
+            throw OrganizationI18nExceptions.organizationAccessDenied();
+        }
+    }
+
+    @Override
+    protected Specification<OrganizationEntity> createSpecification(OrganizationRequest request) {
+        return OrganizationSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<OrganizationEntity> executePageQuery(Specification<OrganizationEntity> spec, Pageable pageable) {
+        return organizationRepository.findAll(spec, pageable);
+    }
+
+    @Override
+    public Page<OrganizationResponse> queryByOrg(OrganizationRequest request) {
+        Pageable pageable = request.getPageable();
+        Specification<OrganizationEntity> spec = createSpecification(request);
+        Page<OrganizationEntity> page = executePageQuery(spec, pageable);
+        return page.map(this::convertToResponse);
+    }
+
+    /**
+     * 覆盖基类默认实现：超级管理员查询组织列表时不应强制注入 userUid。
+     *
+     * 说明：前端超级管理员列表页调用的是 /api/v1/org/query（即 queryByUser 链路），
+     * BaseRestService#queryByUser 会默认 request.setUserUid(currentUser.uid)，
+     * 导致最终只返回“自己创建的组织”。
+     */
+    @Override
+    public Page<OrganizationResponse> queryByUser(OrganizationRequest request) {
+        UserEntity user = authService.getUser();
+        if (user == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+
+        // 防止前端伪造 isSuperUser 标志：只有真正的超级管理员才能生效
+        if (Boolean.TRUE.equals(request.getSuperUser()) && !user.isSuperUser()) {
+            request.setSuperUser(false);
+        }
+
+        // 超级管理员：分页返回全部组织
+        if (user.isSuperUser() || Boolean.TRUE.equals(request.getSuperUser())) {
+            request.setUserUid(null);
+            return queryByOrg(request);
+        }
+
+        // 普通用户：只查询自己创建/管理的组织
+        request.setUserUid(user.getUid());
+        return queryByOrg(request);
+    }
+
+    /**
+     * 搜索组织（用于“申请加入组织”场景）
+     *
+     * 说明：该场景下用户可能还没有 currentOrganization，因此不能复用 queryByUser/queryByUid 里
+     * 依赖 HAS_ORGANIZATION_* 权限的链路。
+     */
+    public Page<OrganizationResponseSimple> searchForJoin(OrganizationRequest request) {
+        UserEntity user = authService.getUser();
+        if (user == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+
+        Pageable pageable = request.getPageable();
+        Specification<OrganizationEntity> spec = OrganizationSpecification.search(request, authService)
+                .and((root, query, criteriaBuilder) -> criteriaBuilder.equal(root.get("enabled"), true));
+        Page<OrganizationEntity> page = organizationRepository.findAll(spec, pageable);
+        return page.map(entity -> modelMapper.map(entity, OrganizationResponseSimple.class));
+    }
+
+    /**
+     * 平台查询组织列表（desktop「平台查询」组织选择器数据源）。
+     *
+     * 鉴权：仅超级管理员或平台默认组织（df_org_uid）成员可用；
+     * 返回 OrganizationResponseSimple 简版字段，不包含联系人等敏感信息（R11）；
+     * 审计：Controller 层 @ActionAnnotation 留痕。
+     */
+    public Page<OrganizationResponseSimple> queryByPlatform(OrganizationRequest request) {
+        UserEntity user = authService.getUser();
+        if (user == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+        boolean platformMember = BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(user.getOrgUid());
+        if (!user.isSuperUser() && !platformMember) {
+            throw OrganizationI18nExceptions.organizationAccessDenied();
+        }
+
+        Pageable pageable = request.getPageable();
+        Specification<OrganizationEntity> spec = OrganizationSpecification.search(request, authService);
+        Page<OrganizationEntity> page = organizationRepository.findAll(spec, pageable);
+        return page.map(entity -> modelMapper.map(entity, OrganizationResponseSimple.class));
+    }
+
+    @Transactional
+    @Override
+    public OrganizationResponse create(OrganizationRequest request) {
+        //
+        if (existsByName(request.getName())) {
+            throw OrganizationI18nExceptions.organizationNameExists(request.getName());
+        }
+        if (existsByCode(request.getCode())) {
+            throw OrganizationI18nExceptions.organizationCodeExists(request.getCode());
+        }
+        //
+        UserEntity authUser = authService.getUser();
+        if (authUser == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+        // 
+        UserEntity user = userService.findByUid(authUser.getUid())
+                .orElseThrow(ResourceI18nExceptions::userNotFound);
+        String orgUid = uidUtils.getUid();
+        //
+        OrganizationEntity organization = modelMapper.map(request, OrganizationEntity.class);
+        organization.setUid(orgUid);
+        organization.setUser(user);
+        log.info("Creating organization: {}", organization.toString());
+        applyDefaultVipSettings(organization);
+        organization.setLevel(LevelEnum.ORGANIZATION.name());
+        applyOrganizationLimitsDefaults(organization);
+        //
+        OrganizationEntity savedOrganization;
+        try {
+            savedOrganization = save(organization);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Creating organization failed due to DB constraint. name={}, code={}, userUid={}",
+                    request.getName(), request.getCode(), authUser.getUid(), e);
+
+            if (StringUtils.hasText(request.getName()) && existsByName(request.getName())) {
+                throw OrganizationI18nExceptions.organizationNameExists(request.getName());
+            }
+            if (StringUtils.hasText(request.getCode()) && existsByCode(request.getCode())) {
+                throw OrganizationI18nExceptions.organizationCodeExists(request.getCode());
+            }
+            throw OrganizationI18nExceptions.organizationCreateConstraintFailed();
+        }
+        if (savedOrganization == null) {
+            throw CommonI18nExceptions.createFailed();
+        }
+        user.setCurrentOrganization(savedOrganization);
+        userService.addRoleAdmin(user);
+        //
+        return convertToResponse(savedOrganization);
+    }
+
+    // 超级管理员创建组织
+    @Transactional
+    public OrganizationResponse createBySuper(OrganizationRequest request) {
+        // 
+        UserEntity authUser = authService.getUser();
+        if (authUser == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+        if (!authUser.isSuperUser()) {
+            throw OrganizationI18nExceptions.superAdminRequired();
+        }
+        //
+        if (existsByName(request.getName())) {
+            throw OrganizationI18nExceptions.organizationNameExists(request.getName());
+        }
+        if (existsByCode(request.getCode())) {
+            throw OrganizationI18nExceptions.organizationCodeExists(request.getCode());
+        }
+        // 
+        OrganizationEntity organization = modelMapper.map(request, OrganizationEntity.class);
+        organization.setUid(uidUtils.getUid());
+        if (request.getVip() == null && request.getVipLevel() == null) {
+            applyDefaultVipSettings(organization);
+        }
+        if (organization.getVipLevel() == null) {
+            organization.setVipLevel(Boolean.TRUE.equals(organization.getVip()) ? 1 : 0);
+        }
+        if (organization.getVipExpireDate() == null && OrganizationDefaults.normalizeVipLevel(organization.getVipLevel()) > 0) {
+            organization.setVipExpireDate(OrganizationDefaults.resolveDefaultVipExpireDate(bytedeskProperties, organization.getVipLevel()));
+        }
+        applyOrganizationLimitsDefaults(organization);
+        // 使用 userUid 查询用户
+        if (StringUtils.hasText(request.getUserUid())) {
+            UserEntity user = userService.findByUid(request.getUserUid())
+                .orElseThrow(ResourceI18nExceptions::userNotFound);
+            validateAdminCandidate(user, organization);
+            organization.setUser(user);
+            
+        }
+        // 
+        OrganizationEntity savedOrganization;
+        try {
+            savedOrganization = save(organization);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Creating organization by super failed due to DB constraint. name={}, code={}, operatorUid={}",
+                    request.getName(), request.getCode(), authUser.getUid(), e);
+
+            if (StringUtils.hasText(request.getName()) && existsByName(request.getName())) {
+                throw OrganizationI18nExceptions.organizationNameExists(request.getName());
+            }
+            if (StringUtils.hasText(request.getCode()) && existsByCode(request.getCode())) {
+                throw OrganizationI18nExceptions.organizationCodeExists(request.getCode());
+            }
+            throw OrganizationI18nExceptions.organizationCreateConstraintFailed();
+        }
+        if (savedOrganization == null) {
+            throw CommonI18nExceptions.createFailed();
+        }
+        if (savedOrganization.getUser() != null) {
+            savedOrganization.getUser().setCurrentOrganization(savedOrganization);
+            userService.addRoleAdmin(savedOrganization.getUser());
+        }
+        return convertToResponse(savedOrganization);
+    }
+
+    @Transactional
+    @Override
+    public OrganizationResponse update(OrganizationRequest request) {
+        // 查找要更新的组织
+        Optional<OrganizationEntity> organizationOptional = findByUid(request.getUid());
+        if (!organizationOptional.isPresent()) {
+            // 如果组织不存在，可以抛出一个自定义异常，例如OrganizationNotFoundException
+            throw OrganizationI18nExceptions.organizationNotFound(request.getUid());
+        }
+
+        // 获取要更新的组织实体
+        OrganizationEntity organization = organizationOptional.get();
+
+        // 非平台管理员/超级管理员：只能更新自己创建的组织
+        assertOwnerOrPrivileged(organization);
+        
+        // 检查 name 唯一性（排除当前组织）
+        if (!organization.getName().equals(request.getName())) {
+            if (organizationRepository.existsByNameAndDeletedAndUidNot(request.getName(), false, request.getUid())) {
+                throw OrganizationI18nExceptions.organizationNameExists(request.getName());
+            }
+        }
+        
+        // 检查 code 唯一性（排除当前组织）
+        if (!organization.getCode().equals(request.getCode())) {
+            if (organizationRepository.existsByCodeAndDeletedAndUidNot(request.getCode(), false, request.getUid())) {
+                throw OrganizationI18nExceptions.organizationCodeExists(request.getCode());
+            }
+        }
+        
+        // 使用ModelMapper进行属性拷贝，避免逐一设置字段
+        // modelMapper.map(organizationRequest, organization); // 一些默认值会被清空，待前端支持完善之后再启用
+        organization.setName(request.getName());
+        organization.setLogo(request.getLogo());
+        organization.setCode(request.getCode());
+        organization.setDescription(request.getDescription());
+
+        // 保存更新后的组织
+        OrganizationEntity updatedOrganization = save(organization);
+        if (updatedOrganization == null) {
+            throw CommonI18nExceptions.updateFailed();
+        }
+        
+        // 转换为响应对象
+        return convertToResponse(updatedOrganization);
+    }
+
+    @Override
+    public OrganizationResponse queryByUid(OrganizationRequest request) {
+        Optional<OrganizationEntity> organizationOptional = findByUid(request.getUid());
+        if (!organizationOptional.isPresent()) {
+            throw OrganizationI18nExceptions.organizationNotFound(request.getUid());
+        }
+        OrganizationEntity organization = organizationOptional.get();
+
+        // 非平台管理员/超级管理员：只能查询自己创建的组织
+        // assertOwnerOrPrivileged(organization);
+        return convertToResponse(organization);
+    }
+
+    /**
+     * 统一的「更换组织管理员」入口（超级管理员 或 该组织管理员本人）。
+     *
+     * 语义（与规划 2026-09-20-org-admin-transfer-sync-plan 对齐）：
+     * 1. organization.user 指向新管理员；
+     * 2. 新管理员：currentOrganization 指向本组织 + ROLE_ADMIN + 幂等补齐 MemberEntity（事务内）；
+     * 3. 原管理员：仅移除本组织管理员角色，保留成员身份/客服资格/其它组织关系；
+     *    仅当显式「移除成员」时才清理成员记录并级联停用客服；
+     * 4. 事务提交后发布 OrganizationAdminTransferEvent，由 service 模块为新管理员创建默认一对一客服。
+     *
+     * 注意：不要复用 OrganizationCreateEvent，那会重放全部组织初始化监听器。
+     */
+    @Transactional
+    public OrganizationResponse transferAdmin(OrganizationRequest request) {
+        if (request == null || !StringUtils.hasText(request.getUid()) || !StringUtils.hasText(request.getUserUid())) {
+            throw new RuntimeException(I18Consts.I18N_ORG_UID_REQUIRED);
+        }
+
+        UserEntity authUser = authService.getUser();
+        if (authUser == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+
+        // 事务内直接查库，拿到受管实体（不走 @Cacheable 缓存，避免懒加载问题）
+        OrganizationEntity organization = organizationRepository.findByUid(request.getUid())
+                .orElseThrow(() -> OrganizationI18nExceptions.organizationNotFound(request.getUid()));
+        if (organization.isDeleted()) {
+            throw OrganizationI18nExceptions.organizationNotFound(request.getUid());
+        }
+        // 默认组织（平台组织）不允许通过本接口更换管理员
+        if (BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(organization.getUid())) {
+            throw OrganizationI18nExceptions.defaultOrganizationTransferDenied();
+        }
+        // 目标组织必须启用
+        if (Boolean.FALSE.equals(organization.getEnabled())) {
+            throw OrganizationI18nExceptions.organizationAccessDenied();
+        }
+
+        // 权限：超级管理员 或 该组织管理员本人（organization.user 对应用户）
+        boolean isSuper = authUser.isSuperUser();
+        boolean isOrgAdminOwner = organization.getUser() != null
+                && StringUtils.hasText(organization.getUser().getUid())
+                && authUser.getUid().equals(organization.getUser().getUid());
+        if (!isSuper && !isOrgAdminOwner) {
+            throw OrganizationI18nExceptions.organizationAdminTransferDenied();
+        }
+
+        // 目标用户：按预取组织关系加载，校验真实组织归属（不用 currentOrganization 单字段判断）
+        UserEntity newUser = userService.findByUidWithOrganizations(request.getUserUid())
+                .orElseThrow(ResourceI18nExceptions::userNotFound);
+        boolean adminUnchanged = organization.getUser() != null
+            && request.getUserUid().equals(organization.getUser().getUid());
+        if (!adminUnchanged) {
+            validateAdminCandidate(newUser, organization);
+        }
+
+        UserEntity originalUser = organization.getUser();
+        organization.setUser(newUser);
+        OrganizationEntity updatedOrganization = save(organization);
+        if (updatedOrganization == null) {
+            throw CommonI18nExceptions.updateFailed();
+        }
+
+        applyAdminTransfer(updatedOrganization, newUser, originalUser);
+
+        return convertToResponse(updatedOrganization);
+    }
+
+    /**
+     * 校验组织管理员目标用户（createBySuper/updateBySuper/transferAdmin 三入口共用）：
+     * - 不得是平台超级用户/系统账号；
+     * - 不得已是其它真实组织的管理员（避免一人同时担任多个组织管理员、原组织管理员指针悬空）；
+     * - 其它组织的普通成员允许，转移后保留其原组织成员/角色关系（多组织并存）。
+     * 平台默认组织 df_org_uid 视为“无组织”，不计入管理员归属冲突。
+     */
+    private void validateAdminCandidate(UserEntity targetUser, OrganizationEntity organization) {
+        if (targetUser.isSuperUser()
+                || BytedeskConsts.DEFAULT_FILE_ASSISTANT_UID.equals(targetUser.getUid())
+                || BytedeskConsts.DEFAULT_SYSTEM_UID.equals(targetUser.getUid())) {
+            throw OrganizationI18nExceptions.organizationAdminTargetInvalid();
+        }
+
+        List<OrganizationEntity> otherAdminOrganizations = organizationRepository
+                .findActiveOtherOrganizationsByUser(
+                        targetUser,
+                        organization.getUid(),
+                        BytedeskConsts.DEFAULT_ORGANIZATION_UID);
+        if (otherAdminOrganizations != null && !otherAdminOrganizations.isEmpty()) {
+            log.warn("admin candidate denied, target user is already an admin of other orgs: userUid={}, orgs={}",
+                    targetUser.getUid(),
+                    otherAdminOrganizations.stream().map(otherOrg -> otherOrg.getUid()).toList());
+            throw OrganizationI18nExceptions.organizationAdminTargetInOtherOrg();
+        }
+    }
+
+    /**
+     * 统一的管理员转移逻辑（transferAdmin 与 updateBySuper 共用）：
+     * 1. 新管理员：currentOrganization + ROLE_ADMIN + 成员补齐（事务内，幂等）；
+     * 2. 原管理员：仅移除本组织管理员角色（保留成员身份与其它组织关系，不调用“移除成员”）；
+     * 3. 事务内同步发布 OrganizationAdminTransferEvent，由 AFTER_COMMIT 监听器创建默认客服。
+     */
+    private void applyAdminTransfer(OrganizationEntity organization, UserEntity newUser, UserEntity originalUser) {
+        // 1. 新管理员
+        newUser.setCurrentOrganization(organization);
+        userService.addRoleAdmin(newUser);
+        UserEntity savedNewUser = userService.save(newUser);
+        if (savedNewUser != null) {
+            newUser = savedNewUser;
+        }
+        // 成员补齐（事务内，保证数据不变量：管理员必有本组织 MemberEntity）
+        memberRestServiceProvider.getObject().ensureMemberForOrganizationAdmin(newUser, organization);
+
+        // 2. 原管理员：仅移除本组织的管理员角色
+        if (originalUser != null
+                && StringUtils.hasText(originalUser.getUid())
+                && !originalUser.getUid().equals(newUser.getUid())
+                && !originalUser.isSuperUser()) {
+            removeAdminRoleForOrganization(originalUser, organization);
+        }
+
+        // 3. 提交后事件（AFTER_COMMIT 消费，回滚不触发）
+        String oldAdminUserUid = originalUser != null ? originalUser.getUid() : null;
+        applicationEventPublisher.publishEvent(new OrganizationAdminTransferEvent(
+                this, organization.getUid(), oldAdminUserUid, newUser.getUid()));
+        log.info("organization admin transferred: orgUid={}, oldAdmin={}, newAdmin={}",
+                organization.getUid(), oldAdminUserUid, newUser.getUid());
+    }
+
+    /**
+     * 仅移除原管理员在指定组织上的管理员角色。
+     * 角色操作以 currentOrganization 为准：若原管理员当前组织不是目标组织，
+     * 临时切换到目标组织移除后再恢复，避免误删其它组织的角色。
+     */
+    private void removeAdminRoleForOrganization(UserEntity oldAdmin, OrganizationEntity organization) {
+        String originalOrgUid = oldAdmin.getCurrentOrganization() != null
+                && StringUtils.hasText(oldAdmin.getCurrentOrganization().getUid())
+                        ? oldAdmin.getCurrentOrganization().getUid()
+                        : null;
+        boolean needRestore = originalOrgUid != null && !originalOrgUid.equals(organization.getUid());
+        if (needRestore) {
+            userService.ensureCurrentOrganization(oldAdmin, organization.getUid());
+        }
+        userService.removeRoleAdmin(oldAdmin);
+        if (needRestore) {
+            userService.ensureCurrentOrganization(oldAdmin, originalOrgUid);
+        }
+        userService.save(oldAdmin);
+    }
+
+    // update by super
+    @Transactional
+    public OrganizationResponse updateBySuper(OrganizationRequest request) {
+        // 查找要更新的组织
+        Optional<OrganizationEntity> organizationOptional = findByUid(request.getUid());
+        if (!organizationOptional.isPresent()) {
+            // 如果组织不存在，可以抛出一个自定义异常，例如OrganizationNotFoundException
+            throw OrganizationI18nExceptions.organizationNotFound(request.getUid());
+        }
+
+        // 获取要更新的组织实体
+        OrganizationEntity organization = organizationOptional.get();
+
+        // 与前端一致：超级用户组织不允许禁用，但允许更新默认组织的其他设置。
+        boolean superUserOrganization = organization.getUser() != null && organization.getUser().isSuperUser();
+        if (superUserOrganization) {
+            boolean enabledChanged = request.getEnabled() != null && !Objects.equals(request.getEnabled(), organization.getEnabled());
+            if (enabledChanged && Boolean.FALSE.equals(request.getEnabled())) {
+                throw OrganizationI18nExceptions.superUserOrganizationDisableDenied();
+            }
+        }
+        boolean defaultOrganization = BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(organization.getUid());
+        if (defaultOrganization) {
+            boolean enabledChanged = request.getEnabled() != null && !Objects.equals(request.getEnabled(), organization.getEnabled());
+            if (enabledChanged && Boolean.FALSE.equals(request.getEnabled())) {
+                throw OrganizationI18nExceptions.defaultOrganizationDisableDenied();
+            }
+        }
+        
+        // 检查 name 唯一性（排除当前组织）
+        if (!organization.getName().equals(request.getName())) {
+            if (organizationRepository.existsByNameAndDeletedAndUidNot(request.getName(), false, request.getUid())) {
+                throw OrganizationI18nExceptions.organizationNameExists(request.getName());
+            }
+        }
+        
+        // 检查 code 唯一性（排除当前组织）
+        if (!organization.getCode().equals(request.getCode())) {
+            if (organizationRepository.existsByCodeAndDeletedAndUidNot(request.getCode(), false, request.getUid())) {
+                throw OrganizationI18nExceptions.organizationCodeExists(request.getCode());
+            }
+        }
+        
+        // 使用ModelMapper进行属性拷贝，避免逐一设置字段
+        // modelMapper.map(organizationRequest, organization); // 一些默认值会被清空，待前端支持完善之后再启用
+        organization.setName(request.getName());
+        organization.setLogo(request.getLogo());
+        organization.setCode(request.getCode());
+        organization.setDescription(request.getDescription());
+        // 认证
+        organization.setVerifiedType(request.getVerifiedType());
+        organization.setIdentityType(request.getIdentityType());
+        organization.setIdentityImage(request.getIdentityImage());
+        organization.setIdentityNumber(request.getIdentityNumber());
+        organization.setVerifyDate(request.getVerifyDate());
+        organization.setVerifyStatus(request.getVerifyStatus());
+        organization.setRejectReason(request.getRejectReason());
+        // 
+        organization.setVip(request.getVip());
+        if (request.getVipLevel() != null) {
+            organization.setVipLevel(Math.max(request.getVipLevel(), 0));
+        }
+        if (Boolean.FALSE.equals(organization.getVip())) {
+            organization.setVipLevel(0);
+        }
+        organization.setVipExpireDate(request.getVipExpireDate());
+        if (request.getVipExpireLoginCheckEnabled() != null) {
+            organization.setVipExpireLoginCheckEnabled(request.getVipExpireLoginCheckEnabled());
+        }
+        if (request.getEnabled() != null) {
+            organization.setEnabled(request.getEnabled());
+        }
+        if (request.getMaxMembers() != null) {
+            organization.setMaxMembers(request.getMaxMembers());
+        }
+        if (request.getMaxAgents() != null) {
+            organization.setMaxAgents(request.getMaxAgents());
+        }
+        if (request.getMaxWorkgroups() != null) {
+            organization.setMaxWorkgroups(request.getMaxWorkgroups());
+        }
+        // 保存原先的用户引用，用于后续比较
+        UserEntity originalUser = organization.getUser();
+        
+        // 使用 userUid 查询用户
+        UserEntity newUser = null;
+        if (StringUtils.hasText(request.getUserUid())) {
+            newUser = userService.findByUid(request.getUserUid())
+                    .orElseThrow(ResourceI18nExceptions::userNotFound);
+            boolean adminChanged = originalUser == null
+                    || !originalUser.getUid().equals(newUser.getUid());
+            if (adminChanged) {
+                validateAdminCandidate(newUser, organization);
+            }
+            organization.setUser(newUser);
+        }
+        
+        // 保存更新后的组织
+        OrganizationEntity updatedOrganization = save(organization);
+        if (updatedOrganization == null) {
+            throw CommonI18nExceptions.updateFailed();
+        }
+        
+        // 处理用户组织和角色的更新
+        if (newUser != null) {
+            // 判断是否与原先用户相同
+            if (originalUser == null || !originalUser.getUid().equals(newUser.getUid())) {
+                // 管理员变更：复用统一的管理员转移逻辑（含成员补齐与提交后事件发布），
+                // 原管理员仅移除本组织管理员角色，保留成员身份，与 transferAdmin 语义一致
+                applyAdminTransfer(updatedOrganization, newUser, originalUser);
+            } else {
+                // 用户相同，无需重复设置
+                log.info("User unchanged, no need to update organization and roles: {}", newUser.getUid());
+            }
+        } else if (originalUser != null) {
+            // 新用户为空，但原先有用户，需要清除原先用户的组织和角色（保持既有语义，不走管理员转移逻辑）
+            originalUser.setCurrentOrganization(null);
+            originalUser.removeOrganizationRoles();
+            userService.removeRoleAdmin(originalUser);
+            userService.save(originalUser);
+            log.info("Cleared original user's current organization and roles (new user is null): {}", originalUser.getUid());
+        }
+        
+        // 转换为响应对象
+        return convertToResponse(updatedOrganization);
+    }
+
+    public List<OrganizationEntity> findAll() {
+        return organizationRepository.findByDeletedFalse();
+    }
+
+    @Cacheable(value = "organization", key = "#uid", unless = "#result == null")
+    public Optional<OrganizationEntity> findByUid(String uid) {
+        return organizationRepository.findByUid(uid);
+    }
+
+    public Optional<OrganizationEntity> findFreshByUid(String uid) {
+        return organizationRepository.findByUid(uid);
+    }
+
+    @Cacheable(value = "organization", key = "#name", unless = "#result == null")
+    public Optional<OrganizationEntity> findByName(String name) {
+        return organizationRepository.findByNameAndDeleted(name, false);
+    }
+
+    @Cacheable(value = "organization", key = "#code", unless = "#result == null")
+    public Optional<OrganizationEntity> findByCode(String code) {
+        return organizationRepository.findByCodeAndDeleted(code, false);
+    }
+
+    public Boolean existsByName(String name) {
+        return organizationRepository.existsByNameAndDeleted(name, false);
+    }
+
+    public Boolean existsByCode(String code) {
+        return organizationRepository.existsByCodeAndDeleted(code, false);
+    }
+
+    @Transactional
+    public OrganizationResponse updateEnabledBySuper(OrganizationRequest request) {
+        Optional<OrganizationEntity> organizationOptional = findByUid(request.getUid());
+        if (!organizationOptional.isPresent()) {
+            throw OrganizationI18nExceptions.organizationNotFound(request.getUid());
+        }
+
+        OrganizationEntity organization = organizationOptional.get();
+        Boolean enabled = request.getEnabled();
+        if (enabled == null) {
+            return convertToResponse(organization);
+        }
+
+        boolean enabledChanged = !Objects.equals(enabled, organization.getEnabled());
+        if (!enabledChanged) {
+            return convertToResponse(organization);
+        }
+
+        boolean superUserOrganization = organization.getUser() != null && organization.getUser().isSuperUser();
+        if (superUserOrganization && Boolean.FALSE.equals(enabled)) {
+            throw OrganizationI18nExceptions.superUserOrganizationDisableDenied();
+        }
+
+        boolean defaultOrganization = BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(organization.getUid());
+        if (defaultOrganization && Boolean.FALSE.equals(enabled)) {
+            throw OrganizationI18nExceptions.defaultOrganizationDisableDenied();
+        }
+
+        organization.setEnabled(enabled);
+        OrganizationEntity updatedOrganization = save(organization);
+        if (updatedOrganization == null) {
+            throw CommonI18nExceptions.updateFailed();
+        }
+        return convertToResponse(updatedOrganization);
+    }
+
+    @Override
+    @Transactional
+    protected OrganizationEntity doSave(OrganizationEntity entity) {
+        OrganizationEntity saved = organizationRepository.save(entity);
+        evictOrganizationCache();
+        return saved;
+    }
+
+    @Override
+    public OrganizationEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            OrganizationEntity organization) {
+        log.info("handleOptimisticLockingFailureException: " + e.getMessage());
+        try {
+            Optional<OrganizationEntity> latest = organizationRepository.findByUid(organization.getUid());
+            if (latest.isPresent()) {
+                OrganizationEntity latestEntity = latest.get();
+
+                // 检查 name 唯一性（排除当前组织）
+                if (!latestEntity.getName().equals(organization.getName())) {
+                    if (organizationRepository.existsByNameAndDeletedAndUidNot(organization.getName(), false, organization.getUid())) {
+                        throw OrganizationI18nExceptions.organizationNameExists(organization.getName());
+                    }
+                }
+                
+                // 检查 code 唯一性（排除当前组织）
+                if (!latestEntity.getCode().equals(organization.getCode())) {
+                    if (organizationRepository.existsByCodeAndDeletedAndUidNot(organization.getCode(), false, organization.getUid())) {
+                        throw OrganizationI18nExceptions.organizationCodeExists(organization.getCode());
+                    }
+                }
+
+                // 合并需要保留的数据
+                latestEntity.setName(organization.getName());
+                latestEntity.setLogo(organization.getLogo());
+                latestEntity.setCode(organization.getCode());
+                latestEntity.setDescription(organization.getDescription());
+
+                // 保存更新后的数据
+                OrganizationEntity saved = organizationRepository.save(latestEntity);
+                evictOrganizationCache();
+                return saved;
+            }
+        } catch (Exception ex) {
+            log.error("Error retrieving latest organization: " + ex.getMessage());
+        }
+        return null;
+    }
+
+    @Override
+    public void deleteByUid(String uid) {
+        if (BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(uid)) {
+            throw OrganizationI18nExceptions.defaultOrganizationDeleteDenied();
+        }
+        Optional<OrganizationEntity> organizationOptional = findByUid(uid);
+        if (organizationOptional.isPresent()) {
+            OrganizationEntity organization = organizationOptional.get();
+            userService.removeAllUsersFromOrganization(uid);
+            organization.setDeleted(true); // 逻辑删除
+            save(organization);
+        } else {
+            throw OrganizationI18nExceptions.organizationNotFound(uid);
+        }
+    }
+
+    @Override
+    public void delete(OrganizationRequest request) {
+        deleteByUid(request.getUid());
+    }
+
+    public OrganizationResponse convertToResponse(OrganizationEntity organization) {
+        OrganizationResponse response = new OrganizationResponse();
+        
+        // 映射基本字段
+        response.setUid(organization.getUid());
+        response.setName(organization.getName());
+        response.setLogo(organization.getLogo());
+        response.setCode(organization.getCode());
+        response.setDescription(organization.getDescription());
+        response.setVerifiedType(organization.getVerifiedType());
+        response.setIdentityType(organization.getIdentityType());
+        response.setIdentityImage(organization.getIdentityImage());
+        response.setIdentityNumber(organization.getIdentityNumber());
+        response.setVerifyDate(organization.getVerifyDate());
+        response.setVerifyStatus(organization.getVerifyStatus());
+        response.setRejectReason(organization.getRejectReason());
+        response.setVip(organization.getVip());
+        response.setVipLevel(organization.getVipLevel());
+        response.setVipExpireDate(organization.getVipExpireDate());
+        response.setVipExpireLoginCheckEnabled(organization.getVipExpireLoginCheckEnabled());
+        response.setEnabled(organization.getEnabled());
+        response.setDeleted(organization.isDeleted());
+        response.setMaxMembers(organization.getMaxMembers());
+        response.setMaxAgents(organization.getMaxAgents());
+        response.setMaxWorkgroups(organization.getMaxWorkgroups());
+        response.setCreatedAt(organization.getCreatedAt());
+        response.setUpdatedAt(organization.getUpdatedAt());
+        
+        // 手动映射用户信息
+        if (organization.getUser() != null) {
+            UserResponse userResponse = new UserResponse();
+            userResponse.setUid(organization.getUser().getUid());
+            userResponse.setUsername(organization.getUser().getUsername());
+            userResponse.setNickname(organization.getUser().getNickname());
+            userResponse.setEmail(organization.getUser().getEmail());
+            userResponse.setMobile(organization.getUser().getMobile());
+            userResponse.setCountry(organization.getUser().getCountry());
+            userResponse.setAvatar(organization.getUser().getAvatar());
+            userResponse.setDescription(organization.getUser().getDescription());
+            userResponse.setPlatform(organization.getUser().getPlatform());
+            
+            // 将字符串转换为 Sex 枚举
+            if (organization.getUser().getSex() != null) {
+                try {
+                    userResponse.setSex(UserEntity.Sex.valueOf(organization.getUser().getSex()));
+                } catch (IllegalArgumentException e) {
+                    userResponse.setSex(UserEntity.Sex.UNKNOWN);
+                }
+            } else {
+                userResponse.setSex(UserEntity.Sex.UNKNOWN);
+            }
+            
+            userResponse.setEnabled(organization.getUser().isEnabled());
+            userResponse.setSuperUser(organization.getUser().isSuperUser());
+            userResponse.setEmailVerified(organization.getUser().isEmailVerified());
+            userResponse.setMobileVerified(organization.getUser().isMobileVerified());
+            userResponse.setCreatedAt(organization.getUser().getCreatedAt());
+            userResponse.setUpdatedAt(organization.getUser().getUpdatedAt());
+            
+            // 设置用户的当前组织为 null，避免循环引用
+            userResponse.setCurrentOrganization(null);
+            
+            response.setUser(userResponse);
+        }
+        
+        return response;
+    }
+
+    
+
+}

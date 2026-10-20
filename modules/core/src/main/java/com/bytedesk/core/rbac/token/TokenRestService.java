@@ -1,0 +1,406 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-05-22 15:42:28
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-03 18:05:29
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.token;
+
+import java.util.Optional;
+import java.util.UUID;
+// import java.time.ZonedDateTime;
+// import java.time.Duration;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.base.BaseRestService;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.enums.PlatformEnum;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserRepository;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.utils.JwtUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@AllArgsConstructor
+@Service
+public class TokenRestService extends BaseRestService<TokenEntity, TokenRequest, TokenResponse> {
+
+    /**
+     * 成员被禁用（forceLogout）时撤销 token 统一使用的撤销原因。
+     * AuthEntryPoint 依据该原因向前端返回明确的"账号已被管理员禁用"提示，
+     * 避免前端只能展示 "Full authentication is required..." 这类技术性报错。
+     */
+    public static final String REVOKE_REASON_MEMBER_FORCE_LOGOUT = "Member disabled (forceLogout)";
+
+    private final TokenRepository tokenRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final UidUtils uidUtils;
+
+    private final AuthService authService;
+
+    private final UserRepository userRepository;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    @Override
+    protected Specification<TokenEntity> createSpecification(TokenRequest request) {
+        return TokenSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<TokenEntity> executePageQuery(Specification<TokenEntity> spec, Pageable pageable) {
+        return tokenRepository.findAll(spec, pageable);
+    }
+
+    @Cacheable(cacheNames = "token", key = "#uid", unless = "#result == null")
+    @Override
+    public Optional<TokenEntity> findByUid(String uid) {
+        return tokenRepository.findByUid(uid);
+    }
+
+    /**
+     * 根据accessToken查找Token实体
+     * 
+     * @param accessToken JWT访问令牌
+     * @return Optional<TokenEntity&gt;
+     */
+    @Cacheable(cacheNames = "token", key = "#accessToken", unless = "#result == null")
+    public Optional<TokenEntity> findByAccessToken(String accessToken) {
+        // 不能在这里加 revoked=false 过滤：否则 revoke 后 findByAccessToken 会查不到，
+        // 鉴权链路也就无法判定其为 revoked，从而导致“改 TokenEntity 让 token 失效”不生效。
+        return tokenRepository.findFirstByAccessTokenAndDeletedFalse(accessToken);
+    }
+
+    /**
+     * 根据 accessToken 查找 Token（不走缓存）。
+     *
+     * 说明：如果直接在数据库里修改 TokenEntity（例如把 revoked=true），缓存无法感知，
+     * 鉴权链路必须使用无缓存查询，才能做到“改 TokenEntity 立即让 token 失效”。
+     */
+    public Optional<TokenEntity> findByAccessTokenNoCache(String accessToken) {
+        return tokenRepository.findFirstByAccessTokenAndDeletedFalse(accessToken);
+    }
+
+    @Override
+    public TokenResponse create(TokenRequest request) {
+        TokenEntity entity = modelMapper.map(request, TokenEntity.class);
+        entity.setUid(uidUtils.getUid());
+        // 尽量由 TokenRestService 统一填充默认值，减少调用方重复逻辑
+        UserEntity currentUser = authService.getCurrentUser();
+
+        // userUid/orgUid：优先使用 request 传入值；否则回退到当前登录用户
+        if (!StringUtils.hasText(entity.getUserUid()) && currentUser != null) {
+            entity.setUserUid(currentUser.getUid());
+        }
+        if (!StringUtils.hasText(entity.getOrgUid()) && currentUser != null) {
+            entity.setOrgUid(currentUser.getOrgUid());
+        }
+
+        // name/description：如果调用方未设置，提供可读默认值
+        if (!StringUtils.hasText(entity.getName())) {
+            String username = currentUser != null ? currentUser.getUsername() : null;
+            entity.setName(StringUtils.hasText(username) ? ("Token - " + username) : "Token");
+        }
+        if (!StringUtils.hasText(entity.getDescription())) {
+            String channel = request.getChannel();
+            String device = request.getDevice();
+            entity.setDescription(String.format("token(channel=%s, device=%s)",
+                    StringUtils.hasText(channel) ? channel : "unknown",
+                    StringUtils.hasText(device) ? device : "unknown"));
+        }
+        
+        // 非永久有效，且未设置过期时间，则根据channel设置默认过期时间
+        if (!Boolean.TRUE.equals(entity.getPermanent()) && entity.getExpiresAt() == null) {
+            entity.setExpiresAt(JwtUtils.calculateExpirationTime(request.getChannel()));
+        }
+
+        // 若未提供 refreshToken，则自动生成，便于后续使用 refresh 接口。
+        if (!StringUtils.hasText(entity.getRefreshToken())) {
+            entity.setRefreshToken(UUID.randomUUID().toString().replace("-", ""));
+        }
+        
+        TokenEntity savedEntity = save(entity);
+        if (savedEntity == null) {
+            throw new RuntimeException(I18Consts.I18N_CREATE_FAILED);
+        }
+
+        return convertToResponse(savedEntity);
+    }
+
+    @Override
+    @CacheEvict(cacheNames = "token", allEntries = true)
+    public TokenResponse update(TokenRequest request) {
+        Optional<TokenEntity> optional = findByUid(request.getUid());
+        if (optional.isPresent()) {
+            TokenEntity entity = optional.get();
+            // 更新实体属性
+            modelMapper.map(request, entity);
+            // 保存更新后的实体
+            TokenEntity updatedEntity = save(entity);
+            if (updatedEntity == null) {
+                throw new RuntimeException(I18Consts.I18N_UPDATE_FAILED);
+            }
+            // 手动将更新后的实体放入缓存
+            // cacheToken(updatedEntity);
+            return convertToResponse(updatedEntity);
+        } else {
+            throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_TOKEN_NOT_FOUND_FOR_UID, request.getUid()));
+        }
+    }
+
+    @Override
+    protected TokenEntity doSave(TokenEntity entity) {
+        return tokenRepository.save(entity);
+    }
+
+    @Override
+    @CacheEvict(cacheNames = "token", allEntries = true)
+    public void deleteByUid(String uid) {
+        Optional<TokenEntity> optional = findByUid(uid);
+        if (optional.isPresent()) {
+            TokenEntity entity = optional.get();
+            entity.setDeleted(true);
+            save(entity);
+        }
+    }
+
+    @Override
+    public void delete(TokenRequest request) {
+        deleteByUid(request.getUid());
+    }
+
+    @Override
+    public TokenEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            TokenEntity entity) {
+        try {
+            // 尝试重新加载实体
+            Optional<TokenEntity> optional = findByUid(entity.getUid());
+            if (optional.isPresent()) {
+                TokenEntity existingEntity = optional.get();
+                // 更新实体属性
+                modelMapper.map(entity, existingEntity);
+                return doSave(existingEntity);
+            } else {
+                throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_TOKEN_NOT_FOUND_FOR_UID, entity.getUid()));
+            }
+        } catch (Exception ex) {
+            log.error("Error handling optimistic locking failure: {}", ex.getMessage());
+            throw ex;
+        }
+    }
+
+    @Override
+    public TokenResponse convertToResponse(TokenEntity entity) {
+        return modelMapper.map(entity, TokenResponse.class);
+    }
+
+    /**
+     * 生成JWT访问令牌
+     * 
+     * @param request TokenRequest 请求参数
+     * @return String 生成的访问令牌
+     */
+    public String generateAccessToken(TokenRequest request) {
+        UserEntity user = authService.getCurrentUser();
+        
+        String username = user.getUsername();
+        String platform = request.getPlatform();
+        if (!StringUtils.hasText(platform)) {
+            platform = PlatformEnum.BYTEDESK.name(); // 默认平台
+        }
+        String channel = request.getChannel();
+        
+        // 永久有效 token 仍然写入 JWT exp，但使用足够长的 100 年有效期避免数据库永久、JWT先过期。
+        return JwtUtils.generateJwtToken(username, platform, channel, request.getPermanent());
+    }
+
+    /**
+     * 使用 refreshToken 刷新 accessToken。
+     */
+    @Transactional
+    @CacheEvict(cacheNames = "token", allEntries = true)
+    public TokenResponse refreshAccessToken(TokenRequest request) {
+        if (!StringUtils.hasText(request.getRefreshToken())) {
+            throw new RuntimeException("refreshToken is required");
+        }
+
+        TokenEntity tokenEntity = tokenRepository.findFirstByRefreshTokenAndDeletedFalse(request.getRefreshToken())
+                .orElseThrow(() -> new RuntimeException("token not found by refreshToken"));
+
+        if (Boolean.TRUE.equals(tokenEntity.getRevoked())) {
+            throw new RuntimeException("token already revoked");
+        }
+
+        if (!StringUtils.hasText(tokenEntity.getUserUid())) {
+            throw new RuntimeException("token userUid is required");
+        }
+
+        UserEntity userEntity = userRepository.findByUid(tokenEntity.getUserUid())
+                .orElseThrow(() -> new RuntimeException("user not found by token userUid"));
+
+        String channel = StringUtils.hasText(request.getChannel()) ? request.getChannel() : tokenEntity.getChannel();
+        String platform = userEntity.getPlatform();
+        if (!StringUtils.hasText(platform)) {
+            platform = PlatformEnum.BYTEDESK.name();
+        }
+
+        boolean permanent = Boolean.TRUE.equals(tokenEntity.getPermanent());
+        String newAccessToken = JwtUtils.generateJwtToken(userEntity.getUsername(), platform, channel, permanent);
+        tokenEntity.setAccessToken(newAccessToken);
+        tokenEntity.setChannel(channel);
+        tokenEntity.setExpiresAt(permanent ? null : JwtUtils.calculateExpirationTime(channel));
+
+        TokenEntity savedEntity = save(tokenEntity);
+        return convertToResponse(savedEntity);
+    }
+
+    /**
+     * 验证accessToken是否有效
+     * 参考AuthTokenFilter中的验证逻辑
+     *
+     * @param accessToken JWT访问令牌
+     * @return boolean 是否有效
+     */
+    public boolean validateAccessToken(String accessToken) {
+        if (!StringUtils.hasText(accessToken)) {
+            log.debug("accessToken is empty");
+            return false;
+        }
+        try {
+            log.debug("validate accessToken {}", accessToken);
+            // 首先验证JWT格式和签名
+            if (!JwtUtils.validateJwtToken(accessToken)) {
+                log.debug("accessToken is invalid");
+                return false;
+            }
+
+            // 性能测试模式：token 可能未落库（AuthService.formatResponse 会跳过 tokenRepository.save），
+            // 因此这里允许仅通过 JWT 校验。
+            if (bytedeskProperties.isDisableIpFilter()) {
+                return true;
+            }
+
+            // 从数据库验证token是否有效（未被撤销且未过期）
+            Optional<TokenEntity> tokenOpt = findByAccessTokenNoCache(accessToken);
+            if (tokenOpt.isPresent() && tokenOpt.get().isValid()) {
+                // 记录最近活跃时间（节流更新）
+                touchLastActiveAtIfNeeded(tokenOpt.get());
+                log.debug("accessToken is valid");
+                return true;
+            } else {
+                log.debug("Token is invalid or revoked");
+                return false;
+            }
+        } catch (Exception e) {
+            log.error("Error validating access token: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 撤销指定的accessToken，使其失效
+     * 
+     * @param accessToken JWT访问令牌
+     */
+    @CacheEvict(cacheNames = "token", allEntries = true)
+    public void revokeAccessToken(String accessToken, String reason) {
+        // 撤销后需要清理缓存（key 既有 uid 也有 accessToken，统一 allEntries 最简单可靠）
+        // 注意：必须加在 public 方法上，避免类内自调用导致 @CacheEvict 不生效。
+        Optional<TokenEntity> optional = findByAccessTokenNoCache(accessToken);
+        if (optional.isPresent()) {
+            TokenEntity entity = optional.get();
+            entity.revoke(reason);
+            save(entity);
+        }
+    }
+
+    /**
+     * 撤销指定 uid 的 token，使其立即失效（适合后台管理界面按行操作）。
+     */
+    @CacheEvict(cacheNames = "token", allEntries = true)
+    public void revokeByUid(String uid, String reason) {
+        // 同 revokeAccessToken：撤销后清理缓存
+        Optional<TokenEntity> optional = findByUid(uid);
+        if (optional.isPresent()) {
+            TokenEntity entity = optional.get();
+            entity.revoke(reason);
+            save(entity);
+        }
+    }
+
+    /**
+     * 批量撤销指定用户在指定组织下的所有有效 token。
+     * 成员被管理员禁用（forceLogout）时调用：使其在所有前端（admin/desktop/notebase/workflow 等）
+     * 的现有会话立即失效——REST 鉴权失败返回 401、MQTT 重连被拒。
+     */
+    @CacheEvict(cacheNames = "token", allEntries = true)
+    @Transactional
+    public int revokeAllByUserUidAndOrgUid(String userUid, String orgUid, String reason) {
+        if (!StringUtils.hasText(userUid) || !StringUtils.hasText(orgUid)) {
+            return 0;
+        }
+        int revoked = tokenRepository.revokeAllByUserUidAndOrgUid(userUid, orgUid, reason);
+        if (revoked > 0) {
+            log.info("Revoked {} tokens for user {} in org {} (reason: {})", revoked, userUid, orgUid, reason);
+        }
+        return revoked;
+    }
+
+    /**
+     * 在 token 被成功校验/使用后，按需更新最近活跃时间。
+     * 为避免高频写库，只有 lastActiveAt 为空或超过最小间隔才会更新。
+     */
+    @Transactional
+    public void touchLastActiveAtIfNeeded(TokenEntity entity) {
+        if (bytedeskProperties.isDisableIpFilter()) {
+            // 性能测试模式可能不落库，这里不强制写库
+            return;
+        }
+
+        // ZonedDateTime now = com.bytedesk.core.utils.BdDateUtils.now();
+        // ZonedDateTime last = entity.getLastActiveAt();
+        // if (last != null && Duration.between(last, now).compareTo(LAST_ACTIVE_UPDATE_MIN_INTERVAL) < 0) {
+        //     return;
+        // }
+
+        // // 使用原子 update 避免对缓存/游离态实体 merge 触发乐观锁异常
+        // try {
+        //     ZonedDateTime threshold = now.minus(LAST_ACTIVE_UPDATE_MIN_INTERVAL);
+        //     int updated = tokenRepository.updateLastActiveAtIfDue(entity.getId(), now, threshold);
+        //     if (updated > 0) {
+        //         // 尽量同步缓存对象，减少下一次重复 update 尝试
+        //         entity.setLastActiveAt(now);
+        //     }
+        // } catch (Exception e) {
+        //     // lastActiveAt 是非关键字段：更新失败不应影响鉴权链路
+        //     log.debug("Ignore lastActiveAt update failure for token uid {}: {}", entity.getUid(), e.getMessage());
+        // }
+    }
+
+    
+
+}

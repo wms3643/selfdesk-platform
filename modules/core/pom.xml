@@ -1,0 +1,506 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>com.bytedesk</groupId>
+		<artifactId>modules</artifactId>
+		<version>${revision}</version>
+	</parent>
+
+	<artifactId>bytedesk-module-core</artifactId>
+
+	<name>bytedesk-module-core</name>
+	<description>https://ai.bytedesk.com</description>
+
+	<properties>
+		<jsonwebtoken.version>0.12.5</jsonwebtoken.version>
+		<protobuf.version>4.28.2</protobuf.version>
+		<protobuf-maven-plugin.version>0.6.1</protobuf-maven-plugin.version>
+		<os-maven-plugin.version>1.7.1</os-maven-plugin.version>
+		<grpc.version>1.74.0</grpc.version>
+		<spring-grpc.version>0.11.0</spring-grpc.version>
+	</properties>
+
+	<dependencies>
+
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-starter-websocket -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-websocket</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- spring statemachine - 迁移到 cola statemachine -->
+		<!-- https://github.com/spring-projects/spring-statemachine -->
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.statemachine/spring-statemachine-starter -->
+		<dependency>
+			<groupId>org.springframework.statemachine</groupId>
+			<artifactId>spring-statemachine-starter</artifactId>
+			<version>4.0.0</version>
+			<scope>provided</scope>
+		</dependency>
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.statemachine/spring-statemachine-data-jpa -->
+		<!-- <dependency>
+			<groupId>org.springframework.statemachine</groupId>
+			<artifactId>spring-statemachine-data-jpa</artifactId>
+			<version>4.0.0</version>
+		</dependency> -->
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.statemachine/spring-statemachine-data-redis -->
+		<!-- <dependency>
+			<groupId>org.springframework.statemachine</groupId>
+			<artifactId>spring-statemachine-data-redis</artifactId>
+			<version>4.0.0</version>
+		</dependency> -->
+		<!-- 替换上面的 spring-statemachine
+		https://mvnrepository.com/artifact/com.alibaba.cola/cola-component-statemachine -->
+		<dependency>
+			<groupId>com.alibaba.cola</groupId>
+			<artifactId>cola-component-statemachine</artifactId>
+			<version>5.0.0</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-common</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-buffer</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-transport</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-codec</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-handler</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-codec-http</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.netty</groupId>
+			<artifactId>netty-codec-mqtt</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/com.google.code.gson/gson -->
+		<dependency>
+			<groupId>com.google.code.gson</groupId>
+			<artifactId>gson</artifactId>
+			<version>2.10.1</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/com.google.protobuf/protobuf-java -->
+		<dependency>
+			<groupId>com.google.protobuf</groupId>
+			<artifactId>protobuf-java</artifactId>
+			<version>${protobuf.version}</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/com.google.protobuf/protobuf-java-util -->
+		<dependency>
+			<groupId>com.google.protobuf</groupId>
+			<artifactId>protobuf-java-util</artifactId>
+			<version>${protobuf.version}</version>
+		</dependency>
+
+		<!-- gRPC 核心依赖 -->
+		<!-- https://mvnrepository.com/artifact/io.grpc/grpc-services -->
+		<!-- 版本由 spring-grpc-dependencies BOM 管理 -->
+		<dependency>
+			<groupId>io.grpc</groupId>
+			<artifactId>grpc-services</artifactId>
+		</dependency>
+
+		<!-- Spring gRPC 集成 -->
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.grpc/spring-grpc-spring-boot-starter -->
+		<!-- 版本由 spring-grpc-dependencies BOM 管理 -->
+		<!--
+		<dependency>
+			<groupId>org.springframework.grpc</groupId>
+			<artifactId>spring-grpc-spring-boot-starter</artifactId>
+		</dependency>
+		-->
+
+		<!-- https://mvnrepository.com/artifact/com.google.guava/guava -->
+		<!-- https://wizardforcel.gitbooks.io/guava-tutorial/content/1.html -->
+		<!-- https://github.com/google/guava/wiki -->
+		<dependency>
+			<groupId>com.google.guava</groupId>
+			<artifactId>guava</artifactId>
+			<version>33.3.1-jre</version>
+		</dependency>
+
+		<!--
+		https://mvnrepository.com/artifact/com.googlecode.protobuf-java-format/protobuf-java-format -->
+		<dependency>
+			<groupId>com.googlecode.protobuf-java-format</groupId>
+			<artifactId>protobuf-java-format</artifactId>
+			<version>1.4</version>
+		</dependency>
+
+		<!-- 汉字转拼音 -->
+		<!-- https://github.com/houbb/pinyin -->
+		<!-- https://mvnrepository.com/artifact/com.github.houbb/pinyin -->
+		<dependency>
+			<groupId>com.github.houbb</groupId>
+			<artifactId>pinyin</artifactId>
+			<version>0.4.0</version>
+		</dependency>
+
+		<!-- Required for Hibernate7Module to work with JPA annotations -->
+		<dependency>
+			<groupId>jakarta.persistence</groupId>
+			<artifactId>jakarta.persistence-api</artifactId>
+			<version>3.2.0</version>
+		</dependency>
+
+		<!-- Redis 缓存序列化 JPA 实体时处理 Hibernate 懒加载代理/集合：
+		     未初始化的懒加载属性序列化为 null，PersistentSet/Bag 替换为标准 JDK 集合，
+		     避免 "Cannot lazily initialize collection (no session)"。
+		     版本由 spring-boot-starter-parent 4.1.x 导入的 tools.jackson:jackson-bom 管理 -->
+		<!-- https://github.com/FasterXML/jackson-datatype-hibernate -->
+		<dependency>
+			<groupId>tools.jackson.datatype</groupId>
+			<artifactId>jackson-datatype-hibernate7</artifactId>
+		</dependency>
+
+		<!-- ////////////////////// 推送 /////////////////////////////////// -->
+
+		<!-- apple push 已随 push_apns 等包迁入 enterprise/core，pushy 依赖同步迁移 -->
+
+		<!-- https://codelabs.developers.google.com/codelabs/push-notifications#0 -->
+		<!-- https://github.com/web-push-libs/webpush-java -->
+		<!-- web push -->
+		<dependency>
+			<groupId>nl.martijndwars</groupId>
+			<artifactId>web-push</artifactId>
+			<version>5.1.1</version>
+		</dependency>
+
+		<!-- web push 依赖 bouncycastle-->
+		<!-- https://search.maven.org/artifact/org.bouncycastle/bcprov-jdk15on/1.70/jar -->
+		<dependency>
+			<groupId>org.bouncycastle</groupId>
+			<artifactId>bcprov-jdk15on</artifactId>
+			<version>1.70</version>
+		</dependency>
+
+		<!--小米推送,FIXME:
+		找不到，只能将jar放到本地.m2相应目录中-->
+		<!-- <dependency>
+			<groupId>com.xiaomi</groupId>
+			<artifactId>xpush</artifactId>
+			<version>1.0.2</version>
+		</dependency> -->
+
+		<!-- ////////////////////// 推送 /////////////////////////////////// -->
+
+		<!-- https://mvnrepository.com/artifact/org.apache.httpcomponents.client5/httpclient5 -->
+		<dependency>
+			<groupId>org.apache.httpcomponents.client5</groupId>
+			<artifactId>httpclient5</artifactId>
+			<version>5.4.3</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/org.apache.httpcomponents.core5/httpcore5 -->
+		<dependency>
+			<groupId>org.apache.httpcomponents.core5</groupId>
+			<artifactId>httpcore5</artifactId>
+			<version>5.2.4</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-api -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-api</artifactId>
+			<version>${jsonwebtoken.version}</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-impl -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-impl</artifactId>
+			<version>${jsonwebtoken.version}</version>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-jackson -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-jackson</artifactId>
+			<version>${jsonwebtoken.version}</version>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- ip2region -->
+		<!-- https://github.com/lionsoul2014/ip2region -->
+		<!-- https://mvnrepository.com/artifact/org.lionsoul/ip2region -->
+		<dependency>
+			<groupId>org.lionsoul</groupId>
+			<artifactId>ip2region</artifactId>
+			<version>2.7.0</version>
+		</dependency>
+
+		<!-- maxmind -->
+		<!-- https://github.com/maxmind/GeoIP2-java -->
+		<!-- https://maxmind.github.io/GeoIP2-java/ -->
+		<!-- https://mvnrepository.com/artifact/com.maxmind.geoip2/geoip2 -->
+		<dependency>
+			<groupId>com.maxmind.geoip2</groupId>
+			<artifactId>geoip2</artifactId>
+			<version>5.0.2</version>
+		</dependency>
+
+		<!-- 身份证/手机号脱敏 -->
+		<!-- https://doc.hutool.cn/pages/IdcardUtil/ -->
+		<!-- https://mvnrepository.com/artifact/cn.hutool/hutool-core -->
+		<!-- <dependency>
+			<groupId>cn.hutool</groupId>
+			<artifactId>hutool-core</artifactId>
+			<version>5.8.36</version>
+		</dependency> -->
+
+		<!-- Emoji -->
+		<!-- https://github.com/vdurmont/emoji-java -->
+		<!-- https://www.webfx.com/tools/emoji-cheat-sheet/ -->
+		<!-- https://mvnrepository.com/artifact/com.vdurmont/emoji-java -->
+		<dependency>
+			<groupId>com.vdurmont</groupId>
+			<artifactId>emoji-java</artifactId>
+			<version>5.1.1</version>
+		</dependency>
+
+		<!-- 上传图片到阿里云OSS -->
+		<!-- https://mvnrepository.com/artifact/com.aliyun.oss/aliyun-sdk-oss -->
+		<dependency>
+			<groupId>com.aliyun.oss</groupId>
+			<artifactId>aliyun-sdk-oss</artifactId>
+			<version>3.17.4</version>
+			<exclusions>
+				<exclusion>
+					<groupId>commons-logging</groupId>
+					<artifactId>commons-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!--腾讯云对象存储-->
+		<!-- https://mvnrepository.com/artifact/com.qcloud/cos_api -->
+		<dependency>
+			<groupId>com.qcloud</groupId>
+			<artifactId>cos_api</artifactId>
+			<version>5.6.205</version>
+			<exclusions>
+				<exclusion>
+					<groupId>commons-logging</groupId>
+					<artifactId>commons-logging</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- MinIO 对象存储 -->
+		<!-- https://mvnrepository.com/artifact/io.minio/minio -->
+		<dependency>
+			<groupId>io.minio</groupId>
+			<artifactId>minio</artifactId>
+			<version>8.6.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>okhttp-jvm</artifactId>
+			<version>5.3.2</version>
+		</dependency>
+
+		<!-- for workflow execution -->
+		<!-- https://mvnrepository.com/artifact/org.jgrapht/jgrapht-core -->
+		<!-- <dependency>
+            <groupId>org.jgrapht</groupId>
+            <artifactId>jgrapht-core</artifactId>
+			<version>1.5.2</version>
+        </dependency> -->
+
+		<!-- property encryption support：仅编译期使用 StringEncryptor 接口（PlatformSecretUtils），
+			运行时由 starter 的 jasypt-spring-boot-starter 提供实现（版本与 starter/pom.xml 对齐） -->
+		<!-- https://github.com/jasypt/jasypt?tab=readme-ov-file -->
+		<dependency>
+			<groupId>com.github.ulisesbocchio</groupId>
+			<artifactId>jasypt-spring-boot-starter</artifactId>
+			<version>3.0.5</version>
+			<scope>provided</scope>
+		</dependency>
+
+
+	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<!-- Spring gRPC BOM - 统一管理 gRPC 相关依赖版本 -->
+			<dependency>
+				<groupId>org.springframework.grpc</groupId>
+				<artifactId>spring-grpc-dependencies</artifactId>
+				<version>${spring-grpc.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<pluginManagement>
+			<plugins>
+				<!-- Only for Eclipse/VS Code m2e: ignore protobuf plugin executions inside the IDE
+				to avoid Problems view errors. -->
+				<plugin>
+					<groupId>org.eclipse.m2e</groupId>
+					<artifactId>lifecycle-mapping</artifactId>
+					<version>1.0.0</version>
+					<configuration>
+						<lifecycleMappingMetadata>
+							<pluginExecutions>
+								<pluginExecution>
+									<pluginExecutionFilter>
+										<groupId>org.xolstice.maven.plugins</groupId>
+										<artifactId>protobuf-maven-plugin</artifactId>
+										<versionRange>[0.0.0,)</versionRange>
+										<goals>
+											<goal>compile</goal>
+											<goal>compile-custom</goal>
+											<goal>test-compile</goal>
+											<goal>test-compile-custom</goal>
+										</goals>
+									</pluginExecutionFilter>
+									<action>
+										<ignore />
+									</action>
+								</pluginExecution>
+							</pluginExecutions>
+						</lifecycleMappingMetadata>
+					</configuration>
+				</plugin>
+			</plugins>
+		</pluginManagement>
+		<extensions>
+			<!-- 用于动态检测操作系统类型 -->
+			<extension>
+				<groupId>kr.motd.maven</groupId>
+				<artifactId>os-maven-plugin</artifactId>
+				<version>${os-maven-plugin.version}</version>
+			</extension>
+		</extensions>
+		<plugins>
+			<!--自动生成protobuf
+			java类 和 gRPC 服务代码-->
+			<plugin>
+				<groupId>org.xolstice.maven.plugins</groupId>
+				<artifactId>protobuf-maven-plugin</artifactId>
+				<version>${protobuf-maven-plugin.version}</version>
+				<configuration>
+					<protocArtifact>
+						com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
+					<protoSourceRoot>${project.basedir}/src/main/proto</protoSourceRoot>
+					<outputDirectory>${project.build.directory}/generated-sources/protobuf/java</outputDirectory>
+					<clearOutputDirectory>false</clearOutputDirectory>
+					<!-- 添加 gRPC 插件配置 -->
+					<pluginId>grpc-java</pluginId>
+					<pluginArtifact>
+						io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>compile</goal>
+							<goal>compile-custom</goal>
+							<goal>test-compile</goal>
+							<goal>test-compile-custom</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>build-helper-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>add-protobuf-generate-sources</id>
+						<phase>generate-sources</phase>
+						<goals>
+							<goal>add-source</goal>
+						</goals>
+						<configuration>
+							<sources>
+								<source>target/generated-sources/protobuf/java</source>
+							</sources>
+						</configuration>
+					</execution>
+					<execution>
+						<id>add-protobuf-generate-test-sources</id>
+						<phase>generate-sources</phase>
+						<goals>
+							<goal>add-test-source</goal>
+						</goals>
+						<configuration>
+							<sources>
+								<source>target/generated-test-sources/protobuf/java</source>
+							</sources>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- Maven 编译器插件 - 配置警告抑制 -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.11.0</version>
+				<configuration>
+					<source>${java.version}</source>
+					<target>${java.version}</target>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+							<version>${lombok.version}</version>
+						</path>
+					</annotationProcessorPaths>
+					<compilerArgs>
+						<!-- 抑制 protobuf 生成代码的警告 -->
+						<arg>-Xlint:-serial</arg>
+						<arg>-Xlint:-rawtypes</arg>
+						<arg>-Xlint:-unchecked</arg>
+						<!-- 为生成的代码目录添加警告抑制 -->
+						<arg>-Xmaxwarns</arg>
+						<arg>10000</arg>
+					</compilerArgs>
+					<!-- 为 protobuf 生成的代码配置特殊处理 -->
+					<generatedSourcesDirectory>target/generated-sources/protobuf/java</generatedSourcesDirectory>
+				</configuration>
+			</plugin>
+
+		</plugins>
+	</build>
+
+
+</project>

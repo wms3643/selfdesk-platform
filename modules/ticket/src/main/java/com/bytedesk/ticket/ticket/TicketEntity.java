@@ -1,0 +1,270 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-01-16 14:56:11
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-25 16:00:03
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ticket.ticket;
+
+import java.time.ZonedDateTime;
+import java.util.Set;
+
+import com.alibaba.fastjson2.JSON;
+import com.bytedesk.core.base.BaseEntity;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+import com.bytedesk.ticket.attachment.TicketAttachmentEntity;
+import com.bytedesk.ticket.ticket.enums.TicketStatusEnum;
+import com.bytedesk.ticket.ticket.enums.TicketPriorityEnum;
+import com.bytedesk.ticket.ticket.enums.TicketTypeEnum;
+import com.bytedesk.ticket.ticket.enums.TicketCreateTypeEnum;
+
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.SuperBuilder;
+import lombok.AllArgsConstructor;
+
+/**
+ * Support ticket entity for customer service and issue tracking
+ * Manages customer support requests, assignments, and resolution tracking
+ * 
+ * Database Table: bytedesk_ticket
+ * Purpose: Stores support tickets, their status, assignments, and resolution history
+ */
+@Data
+@SuperBuilder
+@EqualsAndHashCode(callSuper = true, exclude = { "attachments" })
+@EntityListeners({TicketEntityListener.class})
+@Table(
+    name = "bytedesk_ticket",
+    uniqueConstraints = {
+        @UniqueConstraint(name = "uk_ticket_org_number", columnNames = {"org_uid", "ticket_number"})
+    },
+    indexes = {
+        @jakarta.persistence.Index(name = "idx_ticket_thread_uid", columnList = "thread_uid"),
+        @jakarta.persistence.Index(name = "idx_ticket_visitor_thread_uid", columnList = "visitor_thread_uid"),
+        @jakarta.persistence.Index(name = "idx_ticket_visitor_thread_topic", columnList = "visitor_thread_topic")
+    }
+)
+@Entity(name = "bytedesk_ticket")
+@NoArgsConstructor
+@AllArgsConstructor
+public class TicketEntity extends BaseEntity {
+
+    private static final long serialVersionUID = 1L;
+    
+    /**
+     * Title of the support ticket
+     */
+    private String title;             // 工单标题
+    
+    /**
+     * Detailed description of the ticket issue (optional)
+     */
+    // 工单描述(选填)。使用 TEXT 类型：
+    // 自动建单的默认描述模板 + 会话摘要、AI 生成的描述均可能远超 255 字，
+    // varchar(255) 会触发 MySQL 1406 "Data too long for column 'description'" 导致建单失败
+    @Column(name = "description", columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String description;
+
+    // 联系称呼
+    private String contactName;     // 联系称呼
+    
+    // 联系手机号
+    private String phone;           // 联系手机号
+    
+    // 联系邮箱
+    private String email;           // 联系邮箱
+
+    // 联系微信
+    private String wechat;          // 联系微信
+
+    /**
+     * Current status of the ticket (NEW, IN_PROGRESS, RESOLVED, CLOSED)
+     */
+    @Builder.Default
+    private String status = TicketStatusEnum.NEW.name();          // 状态(新建/处理中/已解决/已关闭)
+    
+    /**
+     * Priority level of the ticket (LOW, MEDIUM, HIGH, URGENT)
+     */
+    @Builder.Default
+    private String priority = TicketPriorityEnum.LOW.name();        // 优先级(低/中/高/紧急)
+
+    /**
+     * Human friendly ticket number generated from ticket settings
+     */
+    private String ticketNumber;
+
+    /**
+     * Ticket scope type (INTERNAL/EXTERNAL)
+     */
+    @Builder.Default
+    @Column(name = "ticket_type", length = 32)
+    private String type = TicketTypeEnum.EXTERNAL.name();        // 工单领域(内部/外部)
+
+    /**
+     * Ticket creation source type (MANUAL/AUTO)
+     * 手动生成：用户/访客主动创建；自动生成：会话关闭后按自动建单规则生成
+     */
+    @Builder.Default
+    @Column(name = "create_type", length = 32)
+    private String createType = TicketCreateTypeEnum.MANUAL.name(); // 工单生成方式(手动/自动)
+
+    /**
+     * Thread topic for ticket processing thread
+     * 一对多：threadTopic -> 多条 ticket
+     */
+    private String threadTopic;
+
+    /**
+     * Associated ticket processing thread UID (TICKET_INTERNAL/TICKET_EXTERNAL thread,
+     * created and back-filled by the ticket creation flow)
+     * 一对一：threadUid -> 单条 ticket
+     */
+    private String threadUid;
+
+    /**
+     * Visitor/customer-service source thread uid associated when creating internal ticket
+     * or auto-creating external ticket on thread close (not the ticket processing thread)
+     * 一对多：visitorThreadUid -> 多条 ticket
+     */
+    private String visitorThreadUid;
+
+    /**
+     * Visitor/customer-service source thread topic associated when creating internal ticket
+     * or auto-creating external ticket on thread close (not the ticket processing thread)
+     * 一对多：visitorThreadTopic -> 多条 ticket
+     */
+    private String visitorThreadTopic;
+
+    /**
+     * Associated category UID for ticket classification
+     */
+    private String categoryUid;
+
+    /**
+     * Associated workgroup UID for ticket assignment
+     * 默认外部工单类型关联客服工作组
+     */
+    private String workgroupUid; // 客服工作组
+
+    /**
+     * Associated department UID for ticket routing
+     * 默认内部工单类型关联部门
+     */
+    private String departmentUid; // 内部部门
+
+    /**
+     * Ticket assignee information stored as JSON string
+     * 工单处理人、办理人
+     */
+    @Builder.Default
+    @Column(length = BytedeskConsts.COLUMN_EXTRA_LENGTH)
+    private String assignee = BytedeskConsts.EMPTY_JSON_STRING;
+    
+    /**
+     * Ticket reporter information stored as JSON string
+     * 工单提出者/创建人
+     */
+    @Builder.Default
+    @Column(length = BytedeskConsts.COLUMN_EXTRA_LENGTH)
+    private String reporter = BytedeskConsts.EMPTY_JSON_STRING;
+
+    /**
+     * Attachments associated with the ticket
+     */
+    @OneToMany(mappedBy = "ticket", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private Set<TicketAttachmentEntity> attachments;
+
+    /**
+     * Ticket settings applied during creation
+     */
+    @Column(name = "ticket_settings_uid")
+    private String ticketSettingsUid;
+
+    /**
+     * Process instance ID for workflow integration
+     */
+    private String processInstanceId;
+
+    /**
+     * Process definition entity UID
+     * Also used as Flowable's processDefinitionKey
+     */
+    @Column(name = "process_entity_uid")
+    private String processEntityUid;
+
+    /**
+     * Selected form definition UID
+     */
+    @Column(name = "form_entity_uid")
+    private String formEntityUid;
+
+    /**
+     * 使用自定义表单 替换默认表单
+     * 
+     * Form structure definition stored as JSON format
+     * Contains the complete form schema generated by frontend low-code editor
+     */
+    @Column(name = "form_schema", columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String schema;
+
+    /**
+     * Whether the customer has been verified
+     */
+    @Builder.Default
+    @Column(name = "is_verified")
+    private Boolean verified = false;
+
+    /**
+     * Timestamp when the ticket was resolved
+     */
+    private ZonedDateTime resolvedTime;
+
+    /**
+     * Timestamp when the ticket was closed
+     */
+    private ZonedDateTime closedTime;
+
+    /**
+     * Client platform from which the ticket was created
+     */
+    private String channel;
+    
+    // 获取工单的处理人
+    public UserProtobuf getAssignee() {
+        return JSON.parseObject(assignee, UserProtobuf.class);
+    }
+    public String getAssigneeString() {
+        return assignee;
+    }
+
+    // 获取工单的报告人
+    public UserProtobuf getReporter() {
+        return JSON.parseObject(reporter, UserProtobuf.class);
+    }
+    public String getReporterString() {
+        return reporter;
+    }
+
+
+} 

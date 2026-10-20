@@ -1,0 +1,326 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-01-23 14:52:45
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-19 15:55:36
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ticket.ticket;
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.flowable.engine.RuntimeService;
+import org.flowable.engine.TaskService;
+import org.flowable.engine.runtime.ProcessInstance;
+import org.flowable.task.api.Task;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.message.MessageEntity;
+import com.bytedesk.core.message.event.MessageCreateEvent;
+import com.bytedesk.core.rbac.organization.OrganizationEntity;
+import com.bytedesk.core.rbac.organization.event.OrganizationCreateEvent;
+import com.bytedesk.core.thread.ThreadEntity;
+import com.bytedesk.core.thread.ThreadRestService;
+import com.bytedesk.core.thread.enums.ThreadTypeEnum;
+import com.bytedesk.core.upload.UploadEntity;
+import com.bytedesk.core.upload.UploadTypeEnum;
+import com.bytedesk.core.upload.event.UploadCreateEvent;
+import com.bytedesk.core.utils.Utils;
+import com.bytedesk.ticket.ticket.event.TicketCreateEvent;
+import com.bytedesk.ticket.ticket.event.TicketUpdateAssigneeEvent;
+import com.bytedesk.ticket.ticket.event.TicketUpdateEvent;
+import com.bytedesk.ticket.ticket.event.TicketUpdateDepartmentEvent;
+import com.bytedesk.ticket.ticket.assignment.AssignmentResolutionResult;
+import com.bytedesk.ticket.ticket.assignment.TicketAssignmentService;
+import com.bytedesk.ticket.ticket.enums.TicketTypeEnum;
+import com.bytedesk.ticket.service.TicketNotificationService;
+import com.bytedesk.ticket.utils.FlowableIdUtils;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class TicketEventListener {
+
+    private final RuntimeService runtimeService;
+
+    private final TicketRestService ticketRestService;
+
+    private final TaskService taskService;
+
+    private final ThreadRestService threadRestService;
+
+    private final TicketNotificationService ticketNotificationService;
+
+    private final TicketAssignmentService ticketAssignmentService;
+
+    private final TicketRepository ticketRepository;
+
+    private final TicketSLAService ticketSLAService;
+
+    // 用于防止同一消息重复处理
+    private final Set<String> processedMessageUids = ConcurrentHashMap.newKeySet();
+
+    private boolean hasValidTicketAssignee(TicketEntity ticket) {
+        try {
+            return ticket.getAssignee() != null && StringUtils.hasText(ticket.getAssignee().getUid());
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    @Order(3)
+    @EventListener
+    public void onOrganizationCreateEvent(OrganizationCreateEvent event) {
+        OrganizationEntity organization = (OrganizationEntity) event.getSource();
+        String orgUid = organization.getUid();
+        log.info("ticket - organization created: {}", organization.getName());
+        ticketRestService.initTicketCategory(orgUid);
+    }
+
+    @Transactional
+    @EventListener
+    public void handleTicketCreateEvent(TicketCreateEvent event) {
+        TicketEntity ticket = event.getTicket();
+        log.info("开始创建工单流程实例: ticketUid={}, orgUid={}", ticket.getUid(), ticket.getOrgUid());
+
+        // 重复事件保护：启动/关联流程前重查工单，已有 processInstanceId 说明此前的事件消费
+        // 已启动过流程（重复创建事件/并发消费），直接复用既有流程，防止创建两个流程实例
+        Optional<TicketEntity> committedOpt = ticketRepository.findByUid(ticket.getUid());
+        if (committedOpt.isPresent() && StringUtils.hasText(committedOpt.get().getProcessInstanceId())) {
+            TicketEntity committed = committedOpt.get();
+            log.info("handleTicketCreateEvent: ticket {} already has processInstanceId={}, skip duplicate create event",
+                    ticket.getUid(), committed.getProcessInstanceId());
+            // 若此前分配未生效（流程已存在但工单无处理人），仍尝试补一次自动分配
+            if (!hasValidTicketAssignee(committed)) {
+                try {
+                    ticketAssignmentService.autoAssign(committed, committed.getProcessInstanceId());
+                } catch (Exception ex) {
+                    log.error("handleTicketCreateEvent: retry autoAssign failed for ticket {}", ticket.getUid(), ex);
+                }
+            }
+            return;
+        }
+
+        // 1. 准备流程变量
+        Map<String, Object> variables = new HashMap<>();
+        // 基本变量
+        variables.put(TicketConsts.TICKET_VARIABLE_TICKET_UID, ticket.getUid());
+        variables.put(TicketConsts.TICKET_VARIABLE_DEPARTMENT_UID, ticket.getDepartmentUid());
+        variables.put(TicketConsts.TICKET_VARIABLE_REPORTER_UID, ticket.getReporter().getUid());
+        variables.put(TicketConsts.TICKET_VARIABLE_ORGUID, ticket.getOrgUid());
+        //
+        variables.put(TicketConsts.TICKET_VARIABLE_DESCRIPTION, ticket.getDescription());
+        variables.put(TicketConsts.TICKET_VARIABLE_START_USER_ID, ticket.getReporter().getUid());
+        variables.put(TicketConsts.TICKET_VARIABLE_STATUS, ticket.getStatus());
+        variables.put(TicketConsts.TICKET_VARIABLE_PRIORITY, ticket.getPriority());
+        variables.put(TicketConsts.TICKET_VARIABLE_CATEGORY_UID, ticket.getCategoryUid());
+        variables.putAll(ticketSLAService.buildProcessVariables(ticket));
+        //
+        // processEntityUid 同时作为 Flowable 的 processDefinitionKey
+        String processKey = ticket.getProcessEntityUid();
+        if (!StringUtils.hasText(processKey)) {
+            // 回退到默认的 processEntityUid（基于 orgUid 和 ticket type 计算）
+            processKey = ticket.getType().equals(TicketTypeEnum.EXTERNAL.name())
+                    ? Utils.formatUid(ticket.getOrgUid(),
+                            TicketConsts.TICKET_PROCESS_KEY + TicketConsts.TICKET_EXTERNAL_PROCESS_UID_SUFFIX)
+                    : Utils.formatUid(ticket.getOrgUid(), TicketConsts.TICKET_PROCESS_KEY);
+        }
+        // Flowable 要求 processDefinitionKey 为 NCName（不能以数字开头）
+        processKey = FlowableIdUtils.toProcessDefinitionKey(processKey);
+        // 2. 启动流程实例
+        ProcessInstance processInstance = runtimeService.createProcessInstanceBuilder()
+                .processDefinitionKey(processKey)
+                .tenantId(ticket.getOrgUid())
+                .name(ticket.getTitle())
+                .businessKey(ticket.getUid())
+                .variables(variables)
+                .start();
+        log.info("流程实例创建成功: processInstanceId={}, businessKey={}",
+                processInstance.getId(), processInstance.getBusinessKey());
+
+        // 3. 创建任务
+        Task task = taskService.createTaskQuery()
+                .processInstanceId(processInstance.getId())
+                .taskAssignee(ticket.getReporter().getUid())
+                .singleResult();
+        if (task != null) {
+            // 完成工单创建任务
+            taskService.complete(task.getId());
+        } else {
+            log.error("工单创建任务创建失败: task={}", task);
+        }
+
+        // 4. 设置流程实例变量
+        // 可以在流程执行的任何时候调用, 每次调用都会产生一次变量更新历史记录
+        // 适合设置运行时的动态变量或需要更新的变量
+        // 每次调用都会有一次数据库操作
+        runtimeService.setVariable(processInstance.getId(), TicketConsts.TICKET_VARIABLE_START_TIME, new Date());
+
+        runtimeService.setVariables(processInstance.getId(), ticketSLAService.buildProcessVariables(ticket));
+        // 第一步的assignee设置为reporter
+        runtimeService.setVariable(processInstance.getId(), TicketConsts.TICKET_VARIABLE_ASSIGNEE,
+                ticket.getReporter());
+        // 6. 更新工单的流程实例ID
+        Optional<TicketEntity> ticketOptional = ticketRestService.findByUid(ticket.getUid());
+        if (ticketOptional.isPresent()) {
+            TicketEntity ticketEntity = ticketOptional.get();
+            ticketEntity.setProcessInstanceId(processInstance.getId());
+            // 使用 save 返回的受管实体继续后续流程，避免游离态旧版本引用在 merge 时触发乐观锁失败
+            ticketEntity = ticketRestService.save(ticketEntity);
+            ticketSLAService.initializeSlaRecords(ticketEntity);
+
+            // 7. 自动分配处理人
+            AssignmentResolutionResult assignmentResult =
+                    ticketAssignmentService.autoAssign(ticketEntity, processInstance.getId());
+
+            // 8. 发送新工单通知。
+            // 注意：autoAssign 成功分配时，applyAssignment 内部已通过 notifyTicketAssigned 发送过
+            // TICKET_CREATED 通知（收件人同样覆盖 报告人/处理人/工作组成员），若此处再调用
+            // notifyNewTicket 会导致 desktop 客服端右上角弹出两条内容相同的重复通知。
+            // 因此仅在"本次未自动分配"时补发新工单通知；创建时已显式指定处理人的场景
+            // autoAssign 会直接跳过（返回 unresolved），仍会走到这里发送通知。
+            boolean autoAssignedAndNotified = assignmentResult != null
+                    && assignmentResult.isResolved()
+                    && ticketEntity.getAssignee() != null
+                    && StringUtils.hasText(ticketEntity.getAssignee().getUid());
+            if (!autoAssignedAndNotified) {
+                ticketNotificationService.notifyNewTicket(ticketEntity);
+            }
+        } else {
+            // 事件已改为事务提交后发布，正常不应出现读不到工单行的情况；保留兜底并告警，避免静默丢失流程实例关联
+            log.warn("handleTicketCreateEvent: ticket row not found after commit, ticketUid={}, processInstanceId={} not linked",
+                    ticket.getUid(), processInstance.getId());
+            ticketNotificationService.notifyNewTicket(ticket);
+        }
+    }
+
+    // 监听工单更新事件
+    @EventListener
+    public void handleTicketUpdateEvent(TicketUpdateEvent event) {
+        log.info("TicketEventListener handleTicketUpdateEvent: {}", event.getTicket().getUid());
+        TicketEntity ticket = event.getTicket();
+        // 判断是否删除
+        if (ticket.isDeleted()) {
+            // 同步更新流程实例
+            ProcessInstance processInstance = runtimeService.createProcessInstanceQuery()
+                    .processInstanceId(ticket.getProcessInstanceId())
+                    .singleResult();
+            if (processInstance != null) {
+                runtimeService.deleteProcessInstance(processInstance.getId(), "deleted by user");
+            }
+            // 删除工单会话
+            threadRestService.deleteByUid(ticket.getThreadUid());
+        }
+    }
+
+    @EventListener
+    public void handleTicketUpdateAssigneeEvent(TicketUpdateAssigneeEvent event) {
+        log.info("TicketEventListener handleTicketUpdateAssigneeEvent: {}", event);
+        TicketEntity ticket = event.getTicket();
+        // 撤回原assignee的claim
+        taskService.unclaim(ticket.getProcessInstanceId());
+        // 重新claim新的assignee
+        taskService.claim(ticket.getProcessInstanceId(), event.getNewAssigneeUid());
+    }
+
+    @EventListener
+    public void handleTicketUpdateDepartmentEvent(TicketUpdateDepartmentEvent event) {
+        log.info("TicketEventListener handleTicketUpdateDepartmentEvent: {}", event);
+        TicketEntity ticket = event.getTicket();
+        // 更新当前工作组DepartmentUid
+        runtimeService.setVariable(ticket.getProcessInstanceId(), TicketConsts.TICKET_VARIABLE_DEPARTMENT_UID,
+                event.getNewDepartmentUid());
+    }
+
+    // 监听上传BPMN流程图
+    @EventListener
+    public void onUploadCreateEvent(UploadCreateEvent event) {
+        UploadEntity upload = event.getUpload();
+        // 上传BPMN流程图
+        if (UploadTypeEnum.BPMN.name().equalsIgnoreCase(upload.getType())) {
+            // 启动流程
+            // ProcessInstance processInstance =
+            // runtimeService.startProcessInstanceByKey(upload.getFileName());
+        }
+    }
+
+    /**
+     * 监听工单会话中的消息创建事件，当客服在 TICKET_EXTERNAL 会话中发送消息时，
+     * 通过 TicketNotificationService 向访客推送邮件/短信通知。
+     * 参考 QueueMemberEventListener.onMessageCreateEvent 实现。
+     */
+    @EventListener
+    public void onMessageCreateEvent(MessageCreateEvent event) {
+        MessageEntity message = event.getMessage();
+        if (message == null) {
+            return;
+        }
+
+        // 防止重复处理同一消息
+        String messageUid = message.getUid();
+        if (!StringUtils.hasText(messageUid) || !processedMessageUids.add(messageUid)) {
+            log.debug("TicketEventListener onMessageCreateEvent: skip duplicate, messageUid={}", messageUid);
+            return;
+        }
+
+        // 仅处理客服（AGENT）发送的消息
+        if (!message.isFromAgent()) {
+            log.debug("TicketEventListener onMessageCreateEvent: skip non-agent, messageUid={}, userType={}",
+                    messageUid, message.getUserProtobuf() != null ? message.getUserProtobuf().getType() : "null");
+            return;
+        }
+
+        // 获取消息对应的会话
+        ThreadEntity thread = threadRestService.findByUid(message.getThread().getUid()).orElse(null);
+        if (thread == null) {
+            log.warn("TicketEventListener onMessageCreateEvent: thread not found, messageUid={}, threadUid={}",
+                    messageUid, message.getThread().getUid());
+            return;
+        }
+
+        // 仅处理 TICKET_EXTERNAL 类型会话（客服↔访客）
+        if (!ThreadTypeEnum.TICKET_EXTERNAL.name().equals(thread.getType())) {
+            log.debug("TicketEventListener onMessageCreateEvent: skip non-ticket thread, messageUid={}, threadUid={}, threadType={}",
+                    messageUid, thread.getUid(), thread.getType());
+            return;
+        }
+
+        log.info("TicketEventListener onMessageCreateEvent: agent message in ticket thread, messageUid={}, threadUid={}, agentUid={}",
+                messageUid, thread.getUid(), message.getUserProtobuf().getUid());
+
+        // 根据 threadUid 查询对应工单
+        Optional<TicketEntity> ticketOpt = ticketRepository
+                .findFirstByOrgUidAndThreadUidOrderByCreatedAtDesc(thread.getOrgUid(), thread.getUid());
+        if (ticketOpt.isEmpty()) {
+            log.warn("TicketEventListener onMessageCreateEvent: no ticket found, messageUid={}, threadUid={}, orgUid={}",
+                    messageUid, thread.getUid(), thread.getOrgUid());
+            return;
+        }
+        TicketEntity ticket = ticketOpt.get();
+        log.info("TicketEventListener onMessageCreateEvent: notify visitor, ticketUid={}, ticketNumber={}, agent={}",
+                ticket.getUid(), ticket.getTicketNumber(), message.getUserProtobuf().getNickname());
+        ticketSLAService.completeFirstResponse(ticket, message.getUserProtobuf().getUid());
+
+        // 通知访客（邮件 + 短信），仅告知有新回复
+        ticketNotificationService.notifyVisitorOfAgentMessage(ticket, message.getUserProtobuf().getNickname());
+    }
+
+}

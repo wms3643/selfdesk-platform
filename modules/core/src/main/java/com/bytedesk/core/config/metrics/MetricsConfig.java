@@ -1,0 +1,18 @@
+package com.bytedesk.core.config.metrics;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
+@Configuration
+public class MetricsConfig {
+
+    @Bean
+    public Counter onlineUsersCounter(MeterRegistry registry) {
+        return Counter.builder("bytedesk.online.users")
+                .description("Number of online users")
+                .register(registry);
+    }
+} 

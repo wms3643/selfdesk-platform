@@ -1,0 +1,19 @@
+{
+    "faqs": [
+        {
+            "uid": "faq_001",
+            "question": "SelfDesk支持哪些基本的即时通讯功能？",
+            "answer": "SelfDesk支持丰富的即时通讯功能，包括：1. 单聊功能：支持文本、图片、语音、视频、文件等多种消息类型，具有@提醒、消息撤回、已读回执等功能；2. 群聊功能：支持群组创建、解散、设置、公告、群头像等管理功能，以及成员邀请、移除、禁言等权限管理。"
+        },
+        {
+            "uid": "faq_002",
+            "question": "如何快速使用Docker部署SelfDesk系统？",
+            "answer": "使用Docker部署SelfDesk系统非常简单，只需要两步：1. 克隆项目并启动：执行命令 'git clone https://github.com/Bytedesk/bytedesk.git && cd bytedesk/deploy/docker && ./start.sh'；2. 修改配置文件中的服务器IP，将deploy/docker/compose/compose-bytedesk.yaml中的127.0.0.1替换为你的服务器IP，主要是BYTEDESK_UPLOAD_URL和BYTEDESK_KBASE_API_URL这两个配置项。"
+        },
+        {
+            "uid": "faq_003",
+            "question": "SelfDesk的在线客服模块包含哪些主要功能？",
+            "answer": "SelfDesk的在线客服模块包含三种服务模式：1. agent模式：提供一对一人工客服服务，不支持机器人接待；2. robot模式：提供机器人客服服务，不支持转人工；3. workgroup模式：工作组模式，支持机器人接待，并且支持转人工服务。此外还包括客服管理、会话管理、消息管理、访客管理、自动化功能、统计分析等功能。"
+        }
+    ]
+}

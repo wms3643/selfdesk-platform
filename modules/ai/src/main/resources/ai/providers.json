@@ -1,0 +1,184 @@
+{
+    "ollama": {
+        "nickname": "Ollama",
+        "logo": "ollama.png",
+        "baseUrl": "http://127.0.0.1:11434",
+        "webUrl": "https://ollama.com/",
+        "status": "PRODUCTION"
+    },
+    "zhipuai": {
+        "nickname": "智谱",
+        "logo": "zhipu.png",    
+        "baseUrl": "https://open.bigmodel.cn/api/paas",
+        "webUrl": "https://open.bigmodel.cn/",
+        "status": "PRODUCTION"
+    },
+    "deepseek": {
+        "nickname": "DeepSeek",
+        "logo": "deepseek.png",
+        "baseUrl": "https://api.deepseek.com",
+        "webUrl": "https://deepseek.com/",
+        "status": "PRODUCTION"
+    },
+    "dashscope": {
+        "nickname": "阿里云",
+        "logo": "dashscope.png",
+        "baseUrl": "https://dashscope.aliyuncs.com",
+        "webUrl": "https://dashscope.aliyun.com/",
+        "status": "PRODUCTION"
+    },
+    "siliconflow": {
+        "nickname": "硅基流动",
+        "logo": "siliconflow.png",
+        "baseUrl": "https://api.siliconflow.cn",
+        "webUrl": "https://www.siliconflow.cn/",
+        "status": "PRODUCTION"
+    },
+    "gitee": {
+        "nickname": "Gitee魔力方舟",
+        "logo": "gitee.png",
+        "baseUrl": "https://ai.gitee.com",
+        "webUrl": "https://ai.gitee.com/",
+        "status": "PRODUCTION"
+    },
+    "tencent": {
+        "nickname": "腾讯混元",
+        "logo": "hunyuan.png",
+        "baseUrl": "https://api.hunyuan.cloud.tencent.com",
+        "webUrl": "https://hunyuan.tencent.com/",
+        "status": "PRODUCTION"
+    },
+    "baidu": {
+        "nickname": "百度千帆",
+        "logo": "yiyan.png",
+        "baseUrl": "https://qianfan.baidubce.com/v2",
+        "webUrl": "https://console.bce.baidu.com/iam/#/iam/apikey/list",
+        "status": "PRODUCTION"
+    },
+    "volcengine": {
+        "nickname": "火山引擎",
+        "logo": "doubao.png",
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+        "webUrl": "https://console.volcengine.com/ark/",
+        "status": "PRODUCTION"
+    },
+    "minimax": {
+        "nickname": "Minimax",
+        "logo": "minimax.png",
+        "baseUrl": "https://api.minimax.chat",
+        "webUrl": "https://platform.minimaxi.com/",
+        "status": "PRODUCTION"
+    },
+    "openai": {
+        "nickname": "OpenAI",
+        "logo": "openai.png",
+        "baseUrl": "https://api.openai.com",
+        "webUrl": "https://openai.com/",
+        "status": "PRODUCTION"
+    },
+    "coze": {
+        "nickname": "Coze",
+        "logo": "coze.png",
+        "baseUrl": "https://api.coze.cn",
+        "webUrl": "https://www.coze.cn/",
+        "status": "PRODUCTION"
+    },
+    "dify": {
+        "nickname": "Dify",
+        "logo": "dify.png",
+        "baseUrl": "https://api.dify.ai/v1",
+        "webUrl": "https://www.dify.ai/",
+        "status": "PRODUCTION"
+    },
+    "maxkb": {
+        "nickname": "MaxKB",
+        "logo": "maxkb.png",
+        "baseUrl": "https://api.maxkb.cn",
+        "webUrl": "https://www.maxkb.cn/",
+        "status": "PRODUCTION"
+    },
+    "n8n": {
+        "nickname": "n8n",
+        "logo": "n8n.png",
+        "baseUrl": "https://api.n8n.io",
+        "webUrl": "https://n8n.io/",
+        "status": "PRODUCTION"
+    },
+    "ragflow": {
+        "nickname": "Ragflow",
+        "logo": "ragflow.png",
+        "baseUrl": "https://api.ragflow.io",
+        "webUrl": "https://www.ragflow.io/",
+        "status": "PRODUCTION"
+    },
+    "openrouter": {
+        "nickname": "OpenRouter",
+        "logo": "openrouter.png",
+        "baseUrl": "https://openrouter.ai/api",
+        "webUrl": "https://openrouter.ai/",
+        "status": "PRODUCTION"
+    },
+    "moonshot": {
+        "nickname": "Moonshot",
+        "logo": "moonshot.png",
+        "baseUrl": "https://api.moonshot.cn",
+        "webUrl": "https://moonshot.ai/",
+        "status": "PRODUCTION"
+    },
+    "xinghuo": {
+        "nickname": "讯飞星火",
+        "logo": "xinghuo.png",
+        "baseUrl": "https://xinghuo.xfyun.cn/sparkapi",
+        "webUrl": "https://xinghuo.xfyun.cn/sparkapi",
+        "status": "DEVELOPMENT"
+    },
+    "baichuan": {
+        "nickname": "百小应",
+        "logo": "baichuan.png",
+        "baseUrl": "https://api.baichuan-ai.com",
+        "webUrl": "https://www.baichuan-ai.com/",
+        "status": "DEVELOPMENT"
+    },
+    "yi": {
+        "nickname": "Yi",
+        "logo": "yi.png",
+        "baseUrl": "https://api.lingyiwanwu.com",
+        "webUrl": "https://platform.lingyiwanwu.com/",
+        "status": "DEVELOPMENT"
+    },
+    "stepfun": {
+        "nickname": "StepFun",
+        "logo": "stepfun.png",
+        "baseUrl": "https://api.stepfun.com",
+        "webUrl": "https://platform.stepfun.com/",
+        "status": "DEVELOPMENT"
+    },
+    "groq": {
+        "nickname": "Groq",
+        "logo": "groq.png",
+        "baseUrl": "https://api.groq.com/openai",
+        "webUrl": "https://groq.com/",
+        "status": "DEVELOPMENT"
+    },
+    "anthropic": {
+        "nickname": "Anthropic",
+        "logo": "anthropic.png",
+        "baseUrl": "https://api.anthropic.com/",
+        "webUrl": "https://anthropic.com/",
+        "status": "DEVELOPMENT"
+    },
+    "gemini": {
+        "nickname": "Gemini",
+        "logo": "gemini.png",
+        "baseUrl": "https://generativelanguage.googleapis.com",
+        "webUrl": "https://gemini.google.com/",
+        "status": "DEVELOPMENT"
+    },
+    "aihubmix": {
+        "nickname": "AIHubMix",
+        "logo": "aihubmix.png",
+        "baseUrl": "https://aihubmix.com",
+        "webUrl": "https://aihubmix.com/",
+        "status": "DEVELOPMENT"
+    }
+}

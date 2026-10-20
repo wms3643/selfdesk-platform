@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+  <defs>
+    <linearGradient id="selfdesk-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B1220"/>
+      <stop offset="100%" stop-color="#0F766E"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#selfdesk-gradient)"/>
+  <path d="M116 146c0-26.5 21.5-48 48-48h184c26.5 0 48 21.5 48 48v154c0 26.5-21.5 48-48 48H218l-76 66c-12.2 10.6-31 1.9-31-14.1V146z" fill="#FFFFFF"/>
+  <path d="M298 181c-16-14-41-22-67-22-45 0-79 23-79 58 0 31 23 46 72 57 31 7 42 13 42 28 0 15-14 25-38 25-28 0-56-12-76-31l-29 35c23 24 62 39 103 39 50 0 87-25 87-64 0-34-24-51-75-62-28-6-39-12-39-26 0-13 12-22 33-22 22 0 43 7 57 18l11-32z" fill="#0F766E"/>
+  <circle cx="392" cy="121" r="25" fill="#2DD4BF"/>
+</svg>

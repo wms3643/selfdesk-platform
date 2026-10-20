@@ -1,0 +1,331 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-05 10:02:51
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-26 09:45:03
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ai.robot;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.bytedesk.ai.robot.enums.RobotReasoningEffortEnum;
+import com.bytedesk.ai.robot.enums.RobotSearchTypeEnum;
+import com.bytedesk.ai.robot_tool.RobotToolIntentContext;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.converter.StringListConverter;
+import com.bytedesk.core.llm.LlmDefaults;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Embeddable;
+import jakarta.persistence.Transient;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+// https://docs.spring.io/spring-data/jpa/reference/repositories/projections.html
+@Embeddable
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class RobotLlm {
+
+    // 默认启用llm问答
+    @Builder.Default
+    @Column(name = "is_llm_enabled")
+    private Boolean enabled = true;
+
+    @Builder.Default
+    @Column(name = "is_thinking_enabled")
+    private Boolean thinking = false;
+
+    // enable streaming
+    @Builder.Default
+    @Column(name = "is_streaming_enabled")
+    private Boolean stream = false;
+
+    // 启用搜索
+    @Builder.Default
+    @Column(name = "is_search_enabled")
+    private Boolean search = false;
+
+    // 推理努力程度（reasoning effort）：low/high/xhigh/max
+    @Builder.Default
+    @Column(name = "llm_reasoning_effort")
+    private String reasoningEffort = RobotReasoningEffortEnum.LOW.name();
+
+    // 文本对话模型提供商
+    @Builder.Default
+    @Column(name = "llm_text_provider")
+    private String textProvider = LlmDefaults.DEFAULT_CHAT_PROVIDER;
+
+    @Column(name = "llm_text_provider_uid")
+    private String textProviderUid;
+    
+    // text chat model name
+    @Builder.Default
+    @Column(name = "llm_text_model")
+    private String textModel = LlmDefaults.DEFAULT_CHAT_MODEL; 
+
+    // 视觉模型
+    // 启用vision
+    // @Builder.Default
+    // @Column(name = "is_vision_enabled")
+    // private Boolean visionEnabled = false;
+
+    // // 视觉模型提供商
+    // @Builder.Default
+    // @Column(name = "llm_vision_provider")
+    // private String visionProvider = LlmDefaults.DEFAULT_VISION_PROVIDER;
+
+    // @Column(name = "llm_vision_provider_uid")
+    // private String visionProviderUid;
+
+    // // 视觉模型名称
+    // @Builder.Default
+    // @Column(name = "llm_vision_model")
+    // private String visionModel = LlmDefaults.DEFAULT_VISION_MODEL;
+
+    // 语音模型
+    @Builder.Default
+    @Column(name = "is_audio_enabled")
+    private Boolean audioEnabled = false;
+
+    // 语音模型提供商
+    @Builder.Default
+    @Column(name = "llm_audio_provider")
+    private String audioProvider = LlmDefaults.DEFAULT_AUDIO_PROVIDER;
+
+    @Column(name = "llm_audio_provider_uid")
+    private String audioProviderUid;
+
+    // 语音模型名称
+    @Builder.Default
+    @Column(name = "llm_audio_model")
+    private String audioModel = LlmDefaults.DEFAULT_AUDIO_MODEL;
+
+    // ============ 语音识别（ASR）配置 ============
+    // 是否启用语音识别：机器人会话收到 VOICE/AUDIO 消息时，先 ASR 转文字再送大模型
+    @Builder.Default
+    @Column(name = "is_asr_enabled")
+    private Boolean asrEnabled = false;
+
+    // ASR 厂商 uid（优先复用 LlmProvider 体系，如阿里云百炼/DashScope）
+    @Column(name = "llm_asr_provider_uid")
+    private String asrProviderUid;
+
+    // ASR 模型名称（如 paraformer-v2 / fun-asr）
+    @Builder.Default
+    @Column(name = "llm_asr_model")
+    private String asrModel = "paraformer-v2";
+
+    // 机器人级 apiKey 覆盖项：不填则回退 provider.apiKey → 组织级 ASR key → 系统静态 key
+    @Column(name = "llm_asr_api_key_override", length = 512)
+    private String asrApiKeyOverride;
+
+    // 识别语言（如 zh / en / auto）
+    @Builder.Default
+    @Column(name = "llm_asr_language", length = 16)
+    private String asrLanguage = "zh";
+
+    // 启用rerank
+    @Builder.Default
+    @Column(name = "is_rerank_enabled")
+    private Boolean rerankEnabled = false;
+
+    // rerank model provider
+    @Builder.Default
+    @Column(name = "llm_rerank_provider")
+    private String rerankProvider = LlmDefaults.DEFAULT_RERANK_PROVIDER;
+
+    @Column(name = "llm_rerank_provider_uid")
+    private String rerankProviderUid;
+
+    // rerank model name
+    @Builder.Default
+    @Column(name = "llm_rerank_model")
+    private String rerankModel = LlmDefaults.DEFAULT_RERANK_MODEL;
+
+    // rewrite
+    @Builder.Default
+    @Column(name = "llm_rewrite_enabled")
+    private Boolean rewriteEnabled = false;
+
+    // rewrite model provider
+    @Builder.Default
+    @Column(name = "llm_rewrite_provider")
+    private String rewriteProvider = LlmDefaults.DEFAULT_REWRITE_PROVIDER;
+
+    @Column(name = "llm_rewrite_provider_uid")
+    private String rewriteProviderUid;
+
+    // rewrite model name
+    @Builder.Default
+    @Column(name = "llm_rewrite_model")
+    private String rewriteModel = LlmDefaults.DEFAULT_REWRITE_MODEL;
+
+    // rewrite prompt
+    @Builder.Default
+    @Column(name = "llm_rewrite_prompt", columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String rewritePrompt = RobotConsts.ROBOT_LLM_DEFAULT_REWRITE_PROMPT;
+
+    // search type
+    @Builder.Default
+    @Column(name = "llm_search_type")
+    private String searchType = RobotSearchTypeEnum.FULLTEXT.name();
+
+    @Builder.Default
+    @Column(name = "llm_top_k")
+    private Integer topK = 3;
+
+    @Builder.Default
+    @Column(name = "llm_score_threshold")
+    private Double scoreThreshold = 0.5;
+
+    // do_sample
+    @Builder.Default
+    @Column(name = "llm_do_sample")
+    private Boolean doSample = false;
+
+    // 最大输出长度
+    // 最大token数
+    @Builder.Default
+    @Column(name = "llm_max_tokens")
+    private Integer maxTokens = 1024;
+
+    // 控制随机性
+    // 温度越低，回答结果越固定，随机性越低
+    @Builder.Default
+    @Column(name = "llm_temperature")
+    private Double temperature = 0.0;  // 从float改为Double
+
+    // 核采样参数
+    @Builder.Default
+    @Column(name = "llm_top_p")
+    private Double topP = 0.7;  // 从float改为Double
+
+    // tools list
+    @Builder.Default
+    @Column(name = "llm_tools")
+    @Convert(converter = StringListConverter.class)
+    private List<String> tools = new ArrayList<>();
+
+    // tool_choice
+    @Builder.Default
+    @Column(name = "llm_tool_choice")
+    private String toolChoice = "auto";
+
+    // stop 停止词
+    @Builder.Default
+    @Column(name = "llm_stops")
+    @Convert(converter = StringListConverter.class)
+    private List<String> stops = new ArrayList<>();
+
+    /**
+     * response_format object 指定模型的响应输出格式，默认为text，仅文本模型支持此字段。
+     * 支持两种格式：{ "type": "text" } 表示普通文本输出模式，
+     * 模型返回自然语言文本；{ "type": "json_object" } 表示JSON输出模式，
+     * 模型会返回有效的JSON格式数据，适用于结构化数据提取、API响应生成等场景。
+     * 使用JSON模式时，建议在提示词中明确说明需要JSON格式输出。
+     */
+    @Builder.Default
+    @Column(name = "llm_response_format")
+    // private String responseFormat = RobotLlmResponseFormatEnum.TEXT.getValue();
+    private String responseFormat = "text";
+
+    // request_id 字符串类型，用于唯一标识一次请求，模型会返回相同的request_id。
+    @Column(name = "llm_request_id")
+    private String requestId;
+
+    // user_id string类型，用于标识请求的用户，模型会返回相同的user_id。
+    @Column(name = "llm_user_id")
+    private String userId;
+
+    @Builder.Default
+    @Column(name = "llm_prompt", columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String prompt = RobotConsts.resolveDefaultLlmPrompt();
+    
+    // 上下文消息数，默认0条。一同传递给大模型
+    @Builder.Default
+    @Column(name = "llm_context_msg_count")
+    private Integer contextMsgCount = 0;
+
+    /**
+     * 安全获取上下文消息数，兼容历史数据（数据库列可能为 null）。
+     * 注意：@Builder.Default 仅在使用 builder 构造时生效，JPA 从数据库加载实体时直接反射赋值，
+     * 对于本字段新增前创建的历史 robot 行，该字段在数据库中为 null。
+     */
+    public int getContextMsgCountSafe() {
+        return contextMsgCount != null ? contextMsgCount : 0;
+    }
+
+    // 如果未匹配到关键词，默认回复内容
+    @Builder.Default
+    private String defaultReply = I18Consts.I18N_ROBOT_DEFAULT_REPLY;
+
+    // 知识意图下是否允许在没有知识库检索结果时继续调用 LLM。
+    // false（默认）：KB 未启用或检索为空时返回 defaultReply 并转人工；
+    // true：允许模型在企业知识缺失时自由回答（闲聊仍由意图路由直接放行）。
+    @Builder.Default
+    @Column(name = "llm_use_when_kb_empty")
+    private Boolean useLlmWhenKbEmpty = false;
+
+    @Transient
+    private RobotToolIntentContext toolIntentContext;
+
+    /**
+     * 单轮请求内工具调用总次数上限（规划 G9，非持久化，运行时由已发布 toolsSettings 填充）。
+     * null 或 <=0 表示不限制。
+     */
+    @Transient
+    private Integer maxToolInvocations;
+
+    // ===== Spring AI Advisor 控制字段 =====
+    // 注：敏感词不再按 robot 存储，统一复用 TabooService 数据库源（按 orgUid 隔离），
+    // 与现有消息层 taboo（TabooFilterHelper）共用同一份词库，避免双份维护。
+
+    // SafeGuard（内容安全/敏感词拦截）开关。默认关闭。
+    // 开启后命中敏感词时不转发 LLM，直接返回拦截文案（与消息层 TabooFilterHelper「替换后继续发送」语义不同）。
+    @Builder.Default
+    @Column(name = "llm_safe_guard_enabled")
+    private Boolean safeGuardEnabled = false;
+
+    // 机器人级自定义拦截语（可选，空值时回退到 TabooService.resolveReplyForContent 或 Spring AI 默认文案）。
+    @Builder.Default
+    @Column(name = "llm_safe_guard_failure_response", columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String safeGuardFailureResponse = "";
+
+    // Re-Reading(Re2) 输入增强开关。默认关闭。
+    // 开启后用户输入被「重读一遍」改写，增强推理（response 透传）。
+    @Builder.Default
+    @Column(name = "llm_re_reading_enabled")
+    private Boolean reReadingEnabled = false;
+
+    // 多轮记忆开关。默认关闭（向后兼容）。阶段3 启用 MessageChatMemoryAdvisor 时生效。
+    @Builder.Default
+    @Column(name = "llm_memory_enabled")
+    private Boolean memoryEnabled = false;
+
+    // Query 改写开关（阶段4 RAG 增强）。默认关闭。
+    // 开启后在 KB 检索前用 RewriteQueryTransformer 改写用户 query（不替代 KB 搜索）。
+    @Builder.Default
+    @Column(name = "llm_rag_rewrite_enabled")
+    private Boolean ragRewriteEnabled = false;
+
+    // 多查询扩展开关（阶段4 RAG 增强）。默认关闭。
+    @Builder.Default
+    @Column(name = "llm_rag_multi_query_enabled")
+    private Boolean ragMultiQueryEnabled = false;
+
+}

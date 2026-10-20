@@ -1,0 +1,139 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-11-05 13:43:02
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-07-17 10:03:58
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.organization;
+
+import java.util.Optional;
+
+import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.enums.PermissionEnum;
+import com.bytedesk.core.exception.NotFoundException;
+import com.bytedesk.core.rbac.authority.AuthorityRestService;
+// import com.bytedesk.core.rbac.authority.AuthorityInitializer;
+import com.bytedesk.core.rbac.role.RoleInitializer;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserInitializer;
+import com.bytedesk.core.rbac.user.UserService;
+// import jakarta.annotation.PostConstruct;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Component
+@AllArgsConstructor
+public class OrganizationInitializer implements SmartInitializingSingleton {
+
+    private final RoleInitializer roleInitializer;
+
+    private final UserInitializer userInitializer;
+
+    private final OrganizationRepository organizationRepository;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    private final UserService userService;
+
+    private final OrganizationRestService organizationRestService;
+
+    private final AuthorityRestService authorityRestService;
+
+    @Override
+    public void afterSingletonsInstantiated() {
+        // 先创建组织权限（ROLE_USER 默认绑定依赖这些 authority 存在）
+        initAuthority();
+        // 
+        roleInitializer.init();
+        userInitializer.init();
+        // 
+        init();
+    }
+
+    @Transactional
+    public void init() {
+        // 
+        if (organizationRepository.count() > 0) {
+            return;
+        }
+        log.info("Organization: Default Organization Initializing...");
+        //
+        Optional<UserEntity> superOptional = userService.getSuper();
+        if (superOptional.isPresent()) {
+            UserEntity user = superOptional.get();
+                int defaultVipLevel = OrganizationDefaults.resolveDefaultVipLevel(bytedeskProperties);
+                int defaultMaxMembers = resolveDefaultMaxMembers();
+                int defaultMaxAgents = resolveDefaultMaxAgents();
+                int defaultMaxWorkgroups = resolveDefaultMaxWorkgroups();
+            //
+            OrganizationEntity organization = OrganizationEntity.builder()
+                    .uid(BytedeskConsts.DEFAULT_ORGANIZATION_UID)
+                    .name(bytedeskProperties.getOrganizationName())
+                    .code(bytedeskProperties.getOrganizationCode())
+                    .description(bytedeskProperties.getOrganizationName() + " Description")
+                    .vipLevel(defaultVipLevel)
+                    .vipExpireDate(OrganizationDefaults.resolveDefaultVipExpireDate(bytedeskProperties, defaultVipLevel))
+                    .maxMembers(defaultMaxMembers)
+                    .maxAgents(defaultMaxAgents)
+                    .maxWorkgroups(defaultMaxWorkgroups)
+                    .user(user)
+                    .build();
+            //
+           OrganizationEntity savedOrganization = organizationRestService.save(organization);
+            if (savedOrganization != null) {
+                user.setCurrentOrganization(savedOrganization);
+                user = userService.addRoleSuper(user);
+            } else {
+                throw new RuntimeException("Organization: Default Organization Save Failed");
+            }
+        } else {
+            throw new NotFoundException("Organization: Super User Not Found");
+        }
+    }
+
+    private void initAuthority() {
+        for (PermissionEnum permission : PermissionEnum.values()) {
+            String permissionValue = OrganizationPermissions.ORGANIZATION_PREFIX + permission.name();
+            authorityRestService.createForPlatform(permissionValue);
+        }
+    }
+
+    private int resolveDefaultMaxMembers() {
+        Integer configured = bytedeskProperties.getOrganization().getDefaultMaxMembers();
+        if (configured == null || configured <= 0) {
+            return 20;
+        }
+        return configured;
+    }
+
+    private int resolveDefaultMaxAgents() {
+        Integer configured = bytedeskProperties.getOrganization().getDefaultMaxAgents();
+        if (configured == null || configured <= 0) {
+            return 20;
+        }
+        return configured;
+    }
+
+    private int resolveDefaultMaxWorkgroups() {
+        Integer configured = bytedeskProperties.getOrganization().getDefaultMaxWorkgroups();
+        if (configured == null || configured <= 0) {
+            return 20;
+        }
+        return configured;
+    }
+    
+
+}

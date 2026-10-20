@@ -1,0 +1,176 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:20:17
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-07-16 19:02:33
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  仅支持企业内部员工自用，严禁用于销售、二次销售或者部署SaaS方式销售 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.organization;
+
+import java.time.ZonedDateTime;
+
+import com.bytedesk.core.base.BaseEntityNoOrg;
+import com.bytedesk.core.constant.AvatarConsts;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.fasterxml.jackson.annotation.JsonBackReference;
+import jakarta.persistence.*;
+import jakarta.validation.constraints.NotBlank;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+import lombok.experimental.SuperBuilder;
+import com.bytedesk.core.rbac.organization.enums.OrganizationVerifyTypeEnum;
+import com.bytedesk.core.rbac.organization.enums.OrganizationIdentityTypeEnum;
+import com.bytedesk.core.rbac.organization.enums.OrganizationVerifyStatusEnum;
+
+@Entity
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = false, exclude = { "user" })
+@AllArgsConstructor
+@NoArgsConstructor
+@EntityListeners({ OrganizationEntityListener.class })
+@Table(
+    name = "bytedesk_core_organization",
+    indexes = {
+        @Index(name = "idx_organization_uid", columnList = "uuid")
+    }
+)
+public class OrganizationEntity extends BaseEntityNoOrg {
+
+    private static final long serialVersionUID = 1L;
+
+    @NotBlank
+    /** name should be unique */
+    private String name;
+
+    // logo
+    @Builder.Default
+    private String logo = AvatarConsts.getDefaultAvatarUrl();
+
+    // organization code, 可读性强，供用户搜索
+    private String code;
+
+    @Builder.Default
+    private String description = I18Consts.I18N_DESCRIPTION;
+
+    @Builder.Default
+    private Boolean forceValidateEmail = false;
+
+    @Builder.Default
+    private Boolean forceValidateMobile = false;
+    
+    // 认证类型：企业认证、个人认证、政府事业单位认证
+    @Builder.Default
+    private String verifiedType = OrganizationVerifyTypeEnum.COMPANY.name();
+
+    // 证件类型：营业执照、身份证、护照、其他
+    @Builder.Default
+    private String identityType = OrganizationIdentityTypeEnum.COMPANY_LICENSE.name();
+
+    // 证件图片：营业执照、身份证、护照、其他
+    @Builder.Default
+    private String identityImage = BytedeskConsts.EMPTY_STRING;
+
+    // 证件号码：企业信用代码、身份证号码
+    @Builder.Default
+    private String identityNumber = BytedeskConsts.EMPTY_STRING;
+
+    // 认证时间
+    private ZonedDateTime verifyDate;
+
+    // 认证状态：未认证、已认证、审核中、审核失败
+    @Builder.Default
+    private String verifyStatus = OrganizationVerifyStatusEnum.UNVERIFIED.name();
+
+    // 认证失败原因
+    private String rejectReason;
+
+    // 会员等级：0=非会员，1及以上为会员等级
+    @Builder.Default
+    @Column(name = "vip_level")
+    private Integer vipLevel = 0;
+
+    public Boolean getVip() {
+        return vipLevel != null && vipLevel > 0;
+    }
+
+    public void setVip(Boolean vip) {
+        if (vip == null) {
+            return;
+        }
+        if (Boolean.TRUE.equals(vip)) {
+            if (vipLevel == null || vipLevel < 1) {
+                vipLevel = 1;
+            }
+            return;
+        }
+        vipLevel = 0;
+    }
+
+    @PostLoad
+    @PrePersist
+    @PreUpdate
+    private void normalizeVipLevel() {
+        if (vipLevel == null || vipLevel < 0) {
+            vipLevel = 0;
+        }
+    }
+
+    // 会员截止日期、组织有效期
+    private ZonedDateTime vipExpireDate;
+
+    // 会员到期后是否禁止登录
+    @Builder.Default
+    @Column(name = "is_vip_expire_login_check_enabled")
+    private Boolean vipExpireLoginCheckEnabled = false;
+
+    // 是否启用，状态：启用/禁用
+    @Builder.Default
+    @Column(name = "is_enabled")
+    private Boolean enabled = true;
+
+    // 组织成员最大数：控制组织内创建成员的数量，和同时登录的成员数量
+    @Builder.Default
+    @Column(name = "max_members")
+    private Integer maxMembers = 20;
+
+    // 客服账号最大数：控制组织内创建客服账号的数量，和同时在线的客服账号数量
+    @Builder.Default
+    @Column(name = "max_agents")
+    private Integer maxAgents = 20;
+
+    // 工作组最大数：控制组织内创建工作组的数量
+    @Builder.Default
+    @Column(name = "max_workgroups")
+    private Integer maxWorkgroups = 20;
+
+    // 组织管理员
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JsonBackReference
+    private UserEntity user;
+
+    @Override
+    public String toString() {
+        return "Organization{" +
+                "id=" + super.getId() +
+                ", uid=" + super.getUid() +
+                ", name='" + name + '\'' +
+                ", logo=" + logo +
+                '}';
+    }
+
+}

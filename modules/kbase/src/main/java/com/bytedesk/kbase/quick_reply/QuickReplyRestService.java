@@ -1,0 +1,446 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-03-22 22:59:18
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-20 13:35:04
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.quick_reply;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.base.BaseRestServiceWithExport;
+import com.bytedesk.core.category.CategoryEntity;
+import com.bytedesk.core.category.CategoryTypeEnum;
+import com.bytedesk.core.category.CategoryRequest;
+import com.bytedesk.core.category.CategoryResponse;
+import com.bytedesk.core.category.CategoryRestService;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.enums.LevelEnum;
+import com.bytedesk.core.message.content.FormContent;
+import com.bytedesk.core.message.enums.MessageTypeEnum;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.utils.Utils;
+import lombok.AllArgsConstructor;
+import com.bytedesk.kbase.kbase.KbaseRestService;
+import com.bytedesk.kbase.kbase.KbaseTypeEnum;
+import com.bytedesk.kbase.kbase.KbaseRequest;
+import com.bytedesk.kbase.kbase.KbaseResponse;
+
+@Service
+@AllArgsConstructor
+public class QuickReplyRestService extends BaseRestServiceWithExport<QuickReplyEntity, QuickReplyRequest, QuickReplyResponse, QuickReplyExcel> {
+
+    private final QuickReplyRepository quickReplyRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final UidUtils uidUtils;
+
+    private final CategoryRestService categoryRestService;
+
+    private final KbaseRestService kbaseRestService;
+
+    @Override
+    protected Specification<QuickReplyEntity> createSpecification(QuickReplyRequest request) {
+        return QuickReplySpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<QuickReplyEntity> executePageQuery(Specification<QuickReplyEntity> spec, Pageable pageable) {
+        return quickReplyRepository.findAll(spec, pageable);
+    }
+
+    @Cacheable(value = "quickreply", key = "#uid", unless = "#result == null")
+    @Override
+    public Optional<QuickReplyEntity> findByUid(String uid) {
+        return quickReplyRepository.findByUid(uid);
+    }
+
+    @Override
+    public QuickReplyResponse create(QuickReplyRequest request) {
+        // 判断uid是否已经存在
+        if (StringUtils.hasText(request.getUid()) && findByUid(request.getUid()).isPresent()) {
+            return null;
+        }
+
+        QuickReplyEntity entity = modelMapper.map(request, QuickReplyEntity.class);
+        if (StringUtils.hasText(request.getUid())) {
+            entity.setUid(request.getUid());
+        } else {
+            entity.setUid(uidUtils.getUid());
+        }
+        MessageTypeEnum messageType = MessageTypeEnum.fromValue(normalizeType(request.getType()));
+        entity.setType(messageType.name());
+
+        // FORM 类型：content 统一存储为 FormContent JSON
+        if (MessageTypeEnum.FORM == messageType) {
+            FormContent parsed = FormContent.fromJson(request.getContent());
+            if (parsed == null) {
+                parsed = FormContent.builder()
+                        .formSchema(request.getContent())
+                        .formVersion(1)
+                        .build();
+            }
+            entity.setContent(parsed.toJson());
+        }
+
+        // 如果提供了 agentUid，则强制归属到该坐席的个人快捷回复知识库，并标记为 AGENT 级别
+        if (StringUtils.hasText(request.getAgentUid())) {
+            String agentUid = request.getAgentUid();
+            // 寻找坐席个人的 QUICKREPLY 知识库
+            var list = kbaseRestService.findByLevelAndTypeAndAgentUid(LevelEnum.AGENT, KbaseTypeEnum.QUICKREPLY, agentUid);
+            String kbUid;
+            if (list != null && !list.isEmpty()) {
+                kbUid = list.get(0).getUid();
+            } else {
+                // 若不存在则创建一个最小化的个人快捷回复知识库
+                KbaseRequest kbReq = KbaseRequest.builder()
+                        .name("AgentQuickReplyKb")
+                        .descriptionHtml("Agent Quick Reply Kb")
+                        .language(com.bytedesk.core.enums.LanguageEnum.ZH_CN.name())
+                        .level(LevelEnum.AGENT.name())
+                        .type(KbaseTypeEnum.QUICKREPLY.name())
+                        .agentUid(agentUid)
+                        .orgUid(request.getOrgUid())
+                        .build();
+                KbaseResponse kb = kbaseRestService.create(kbReq);
+                kbUid = kb.getUid();
+            }
+            entity.setKbUid(kbUid);
+            entity.setAgentUid(agentUid);
+            entity.setLevel(LevelEnum.AGENT.name());
+            // 保持 orgUid，用于查询范围判定
+            if (!StringUtils.hasText(entity.getOrgUid())) {
+                entity.setOrgUid(request.getOrgUid());
+            }
+        }
+
+        return convertToResponse(save(entity));
+    }
+
+    @Override
+    public QuickReplyResponse update(QuickReplyRequest request) {
+
+        Optional<QuickReplyEntity> optional = findByUid(request.getUid());
+        if (optional.isPresent()) {
+            QuickReplyEntity entity = optional.get();
+            // modelMapper.map(request, entity);
+            entity.setTitle(request.getTitle());
+            entity.setContent(request.getContent());
+            MessageTypeEnum messageType = MessageTypeEnum.fromValue(normalizeType(request.getType()));
+            entity.setType(messageType.name());
+            entity.setShortCut(request.getShortCut());
+
+            if (MessageTypeEnum.FORM == messageType) {
+                FormContent parsed = FormContent.fromJson(request.getContent());
+                if (parsed == null) {
+                    parsed = FormContent.builder()
+                            .formSchema(request.getContent())
+                            .formVersion(1)
+                            .build();
+                }
+                entity.setContent(parsed.toJson());
+            }
+            // 
+            if (StringUtils.hasText(request.getCategoryUid())) {
+                entity.setCategoryUid(request.getCategoryUid());
+            }
+            // 
+            QuickReplyEntity savedEntity = save(entity);
+            if (savedEntity == null) {
+                throw new RuntimeException("Failed to update QuickReply");
+            }
+            return convertToResponse(savedEntity);
+        } else {
+            throw new RuntimeException("quick_reply not found");
+        }
+    }
+
+    @CachePut(value = "quickreply", key = "#entity.uid")
+    protected QuickReplyEntity doSave(QuickReplyEntity entity) {
+        return quickReplyRepository.save(entity);
+    }
+
+    @Override
+    public QuickReplyEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e, QuickReplyEntity entity) {
+        try {
+            Optional<QuickReplyEntity> latest = quickReplyRepository.findByUid(entity.getUid());
+            if (latest.isPresent()) {
+                QuickReplyEntity latestEntity = latest.get();
+                // 合并需要保留的数据
+                return quickReplyRepository.save(latestEntity);
+            }
+        } catch (Exception ex) {
+            throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+        }
+        return null;
+    }
+
+    public void save(List<QuickReplyEntity> entities) {
+        quickReplyRepository.saveAll(entities);
+    }
+
+    public List<QuickReplyEntity> findAllNotDeleted() {
+        return quickReplyRepository.findByDeleted(false);
+    }
+
+    private String normalizeType(String rawType) {
+        if (!StringUtils.hasText(rawType)) {
+            return rawType;
+        }
+        if ("PHONE".equalsIgnoreCase(rawType)) {
+            return MessageTypeEnum.PHONE_NUMBER.name();
+        }
+        if ("EMAIL".equalsIgnoreCase(rawType)) {
+            return MessageTypeEnum.EMAILL_ADDRESS.name();
+        }
+        if ("WECHAT".equalsIgnoreCase(rawType)) {
+            return MessageTypeEnum.WECHAT_NUMBER.name();
+        }
+        return rawType;
+    }
+
+    // 启用/禁用快捷回复
+    public QuickReplyResponse enable(QuickReplyRequest request) {
+        Optional<QuickReplyEntity> optional = findByUid(request.getUid());
+        if (optional.isPresent()) {
+            QuickReplyEntity entity = optional.get();
+            entity.setEnabled(request.getEnabled());
+            QuickReplyEntity savedEntity = save(entity);
+            if (savedEntity == null) {
+                throw new RuntimeException("Failed to update QuickReply");
+            }
+            return convertToResponse(savedEntity);
+        } else {
+            throw new RuntimeException("quick_reply not found");
+        }
+    }
+
+    @CacheEvict(value = "quickreply", key = "#uid")
+    @Override
+    public void deleteByUid(String uid) {
+        Optional<QuickReplyEntity> optional = findByUid(uid);
+        if (optional.isPresent()) {
+            optional.get().setDeleted(true);
+            save(optional.get());
+        }
+    }
+
+    @Override
+    public void delete(QuickReplyRequest entity) {
+        deleteByUid(entity.getUid());
+    }
+
+    @Override
+    public QuickReplyResponse convertToResponse(QuickReplyEntity entity) {
+        return modelMapper.map(entity, QuickReplyResponse.class);
+    }
+
+    @Override
+    public QuickReplyExcel convertToExcel(QuickReplyEntity quickReply) {
+        QuickReplyExcel quickReplyExcel = modelMapper.map(quickReply, QuickReplyExcel.class);
+
+        // categoryUid 可能为空（历史数据/个人快捷回复等），导出时做容错
+        if (quickReply != null && StringUtils.hasText(quickReply.getCategoryUid())) {
+            Optional<CategoryEntity> categoryOptional = categoryRestService.findByUid(quickReply.getCategoryUid());
+            categoryOptional.ifPresent(category -> quickReplyExcel.setCategory(category.getName()));
+        } else {
+            quickReplyExcel.setCategory("-");
+        }
+        return quickReplyExcel;
+    }
+
+    // 快捷回复分类
+    public void initQuickReplyCategory(String orgUid) {
+        // 
+        String quickReplyCategoryContactUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_CONTACT);
+        // 快捷回复-询问联系方式
+        CategoryRequest categoryContact = CategoryRequest.builder()
+                .name(I18Consts.I18N_QUICK_REPLY_CATEGORY_CONTACT)
+                .order(0)
+                .level(LevelEnum.ORGANIZATION.name())
+                .platform(BytedeskConsts.PLATFORM_BYTEDESK)
+                .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                .build();
+        categoryContact.setType(CategoryTypeEnum.QUICKREPLY.name());
+        categoryContact.setUid(quickReplyCategoryContactUid);
+        // 此处设置orgUid方便超级管理员加载
+        categoryContact.setOrgUid(orgUid);
+        categoryRestService.create(categoryContact);
+
+        // 快捷回复-感谢
+        String quickReplyCategoryThanksUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_THANKS);
+        CategoryRequest categoryThanks = CategoryRequest.builder()
+                .name(I18Consts.I18N_QUICK_REPLY_CATEGORY_THANKS)
+                .order(1)
+                .level(LevelEnum.ORGANIZATION.name())
+                .platform(BytedeskConsts.PLATFORM_BYTEDESK)
+                .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                .build();
+        categoryThanks.setType(CategoryTypeEnum.QUICKREPLY.name());
+        categoryThanks.setUid(quickReplyCategoryThanksUid);
+        // 此处设置orgUid方便超级管理员加载
+        categoryThanks.setOrgUid(orgUid);
+        categoryRestService.create(categoryThanks);
+
+        // 快捷回复-问候
+        String quickReplyCategoryWelcomeUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_WELCOME);
+        CategoryRequest categoryWelcome = CategoryRequest.builder()
+                .name(I18Consts.I18N_QUICK_REPLY_CATEGORY_WELCOME)
+                .order(2)
+                .level(LevelEnum.ORGANIZATION.name())
+                .platform(BytedeskConsts.PLATFORM_BYTEDESK)
+                .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                .build();
+        categoryWelcome.setType(CategoryTypeEnum.QUICKREPLY.name());
+        categoryWelcome.setUid(quickReplyCategoryWelcomeUid);
+        // 此处设置orgUid方便超级管理员加载
+        categoryWelcome.setOrgUid(orgUid);
+        categoryRestService.create(categoryWelcome);
+
+        // 快捷回复-告别
+        String quickReplyCategoryByeUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_BYE);
+        CategoryRequest categoryBye = CategoryRequest.builder()
+                .name(I18Consts.I18N_QUICK_REPLY_CATEGORY_BYE)
+                .order(3)
+                .level(LevelEnum.ORGANIZATION.name())
+                .platform(BytedeskConsts.PLATFORM_BYTEDESK)
+                .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                .build();
+        categoryBye.setType(CategoryTypeEnum.QUICKREPLY.name());
+        categoryBye.setUid(quickReplyCategoryByeUid);
+        // 此处设置orgUid方便超级管理员加载
+        categoryBye.setOrgUid(orgUid);
+        categoryRestService.create(categoryBye);
+    }
+
+    public void initQuickReply(String orgUid) {
+
+        // level = platform, 不需要设置orgUid，此处设置orgUid方便超级管理员加载
+        String quickReplyCategoryContactUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_CONTACT);
+        Optional<CategoryEntity> categoryContact = categoryRestService.findByUid(quickReplyCategoryContactUid);
+        if (categoryContact.isPresent()) {
+            //
+            QuickReplyRequest quickReplyRequest = QuickReplyRequest.builder()
+                    .title(I18Consts.I18N_QUICK_REPLY_CONTACT_TITLE)
+                    .content(I18Consts.I18N_QUICK_REPLY_CONTACT_CONTENT)
+                    .categoryUid(categoryContact.get().getUid())
+                    .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                    .level(LevelEnum.ORGANIZATION.name())
+                    .build();
+            quickReplyRequest.setUid(Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CONTACT_TITLE));
+            quickReplyRequest.setType(MessageTypeEnum.TEXT.name());
+            // 此处设置orgUid方便超级管理员加载
+            quickReplyRequest.setOrgUid(orgUid);
+            create(quickReplyRequest);
+        }
+        //
+        String quickReplyCategoryThanksUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_THANKS);
+        Optional<CategoryEntity> categoryThanks = categoryRestService.findByUid(quickReplyCategoryThanksUid);
+        if (categoryThanks.isPresent()) {
+            //
+            QuickReplyRequest quickReplyRequest = QuickReplyRequest.builder()
+                    .title(I18Consts.I18N_QUICK_REPLY_THANKS_TITLE)
+                    .content(I18Consts.I18N_QUICK_REPLY_THANKS_CONTENT)
+                    .categoryUid(categoryThanks.get().getUid())
+                    .level(LevelEnum.ORGANIZATION.name())
+                    .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                    .build();
+            quickReplyRequest.setUid(Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_THANKS_TITLE));
+            quickReplyRequest.setType(MessageTypeEnum.TEXT.name());
+            // 此处设置orgUid方便超级管理员加载
+            quickReplyRequest.setOrgUid(orgUid);
+            create(quickReplyRequest);
+        }
+        //
+        String quickReplyCategoryWelcomeUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_WELCOME);
+        Optional<CategoryEntity> categoryWelcome = categoryRestService.findByUid(quickReplyCategoryWelcomeUid);
+        if (categoryWelcome.isPresent()) {
+            //
+            QuickReplyRequest quickReplyRequest = QuickReplyRequest.builder()
+                    .title(I18Consts.I18N_QUICK_REPLY_WELCOME_TITLE)
+                    .content(I18Consts.I18N_QUICK_REPLY_WELCOME_CONTENT)
+                    .categoryUid(categoryWelcome.get().getUid())
+                    .level(LevelEnum.ORGANIZATION.name())
+                    .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                    .build();
+            quickReplyRequest.setUid(Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_WELCOME_TITLE));
+            quickReplyRequest.setType(MessageTypeEnum.TEXT.name());
+            // 此处设置orgUid方便超级管理员加载
+            quickReplyRequest.setOrgUid(orgUid);
+            create(quickReplyRequest);
+        }
+
+        String quickReplyCategoryByeUid = Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_CATEGORY_BYE);
+        Optional<CategoryEntity> categoryBye = categoryRestService.findByUid(quickReplyCategoryByeUid);
+        if (categoryBye.isPresent()) {
+            //
+            QuickReplyRequest quickReplyRequest = QuickReplyRequest.builder()
+                    .title(I18Consts.I18N_QUICK_REPLY_BYE_TITLE)
+                    .content(I18Consts.I18N_QUICK_REPLY_BYE_CONTENT)
+                    .categoryUid(categoryBye.get().getUid())
+                    .level(LevelEnum.ORGANIZATION.name())
+                    .kbUid(Utils.formatUid(orgUid, BytedeskConsts.DEFAULT_KB_QUICK_REPLY_UID))
+                    .build();
+            quickReplyRequest.setUid(Utils.formatUid(orgUid, I18Consts.I18N_QUICK_REPLY_BYE_TITLE));
+            quickReplyRequest.setType(MessageTypeEnum.TEXT.name());
+            // 此处设置orgUid方便超级管理员加载
+            quickReplyRequest.setOrgUid(orgUid);
+            create(quickReplyRequest);
+        }
+    }
+
+    // String categoryUid,
+    public QuickReplyEntity convertExcelToQuickReply(QuickReplyExcel excel, String kbUid, String orgUid) {
+        // return modelMapper.map(excel, QuickReply.class);
+        QuickReplyEntity quickReply = QuickReplyEntity.builder().build();
+        quickReply.setUid(uidUtils.getUid());
+        quickReply.setTitle(excel.getTitle());
+        quickReply.setContent(excel.getContent());
+        // quickReply.setType(MessageTypeEnum.TEXT); // TODO: 根据实际类型设置
+        quickReply.setType(MessageTypeEnum.fromValue(excel.getType()).name());
+        //
+        // quickReply.setCategoryUid(categoryUid);
+        Optional<CategoryEntity> categoryOptional = categoryRestService.findByNameAndKbUid(excel.getCategory(), kbUid);
+        if (categoryOptional.isPresent()) {
+            quickReply.setCategoryUid(categoryOptional.get().getUid());
+        } else {
+            // create category
+            CategoryRequest categoryRequest = CategoryRequest.builder()
+                    .name(excel.getCategory())
+                    .kbUid(kbUid)
+                    .build();
+            categoryRequest.setType(CategoryTypeEnum.QUICKREPLY.name());
+            categoryRequest.setOrgUid(orgUid);
+            //
+            CategoryResponse categoryResponse = categoryRestService.create(categoryRequest);
+            quickReply.setCategoryUid(categoryResponse.getUid());
+        }
+
+        quickReply.setKbUid(kbUid);
+        quickReply.setOrgUid(orgUid);
+
+        return quickReply;
+    }
+
+}

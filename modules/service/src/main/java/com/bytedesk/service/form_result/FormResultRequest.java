@@ -1,0 +1,63 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-05-11 18:26:04
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-06-20 14:24:05
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.form_result;
+
+import com.bytedesk.core.base.BaseRequest;
+import com.bytedesk.core.black.BlacklistCheckable;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+import lombok.experimental.SuperBuilder;
+
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = false)
+@AllArgsConstructor
+@NoArgsConstructor
+public class FormResultRequest extends BaseRequest implements BlacklistCheckable {
+
+    private static final long serialVersionUID = 1L;
+
+    private String formUid;
+
+    /**
+     * 触发表单提交的消息UID（用于回写表单结果到该表单消息）
+     */
+    private String messageUid;
+
+    /**
+     * 提交者信息的JSON表示
+     */
+    private String user;
+
+    private String formData;
+
+    /**
+     * 提交时表单 schema 快照，避免后续表单结构变更导致结果不可回溯
+     */
+    private String formSchema;
+
+    private Integer formVersion;
+
+    /**
+     * 黑名单校验：访客提交表单时，操作者为 user 字段中的访客信息
+     */
+    @Override
+    public String getBlacklistOperatorUid() {
+        return BlacklistCheckable.extractUidFromUserJson(user);
+    }
+}

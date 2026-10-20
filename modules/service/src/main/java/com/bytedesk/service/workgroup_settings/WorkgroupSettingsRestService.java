@@ -1,0 +1,1167 @@
+package com.bytedesk.service.workgroup_settings;
+
+import java.util.ArrayList;
+import java.util.Optional;
+
+import org.modelmapper.ModelMapper;
+// import org.springframework.cache.annotation.CacheEvict;
+// import org.springframework.cache.annotation.CachePut;
+// import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.bytedesk.ai.robot.settings.RobotRoutingSettingsEntity;
+import com.bytedesk.ai.robot.settings.RobotRoutingSettingsRequest;
+import com.bytedesk.ai.robot.settings.RobotRoutingSettingsService;
+import com.bytedesk.ai.robot.RobotEntity;
+import com.bytedesk.ai.robot.RobotRepository;
+import com.bytedesk.core.base.BaseRestService;
+import com.bytedesk.core.base.BaseEntity;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.kbase.settings_auto_resolved.AutoResolvedSettingsEntity;
+import com.bytedesk.kbase.settings_emotion.EmotionSettingEntity;
+import com.bytedesk.kbase.settings_invite.InviteSettingsEntity;
+import com.bytedesk.kbase.settings_service.ServiceSettingsEntity;
+import com.bytedesk.kbase.settings_service.ServiceSettingsHelper;
+import com.bytedesk.kbase.settings_intention.IntentionSettingsEntity;
+import com.bytedesk.kbase.settings_summary.SummarySettingsEntity;
+import com.bytedesk.kbase.settings_trigger.TriggerSettingsEntity;
+import com.bytedesk.kbase.settings_trigger.TriggerSettingsHelper;
+import com.bytedesk.kbase.auto_reply.settings.AutoReplySettingsEntity;
+import com.bytedesk.service.message_leave_settings.MessageLeaveSettingsEntity;
+import com.bytedesk.service.message_leave_settings.MessageLeaveSettingsHelper;
+import com.bytedesk.service.queue_settings.QueueSettingsEntity;
+import com.bytedesk.service.robot_to_agent_settings.RobotToAgentSettingsEntity;
+import com.bytedesk.service.workgroup.WorkgroupRepository;
+import com.bytedesk.service.worktime_settings.WorktimeSettingEntity;
+import com.bytedesk.webrtc.webrtc_settings.WebrtcSettingsEntity;
+import com.bytedesk.webrtc.webrtc_settings.WebrtcSettingsRequest;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class WorkgroupSettingsRestService
+        extends BaseRestService<WorkgroupSettingsEntity, WorkgroupSettingsRequest, WorkgroupSettingsResponse> {
+
+    private static void syncOrgUser(BaseEntity target, String orgUid, String userUid) {
+        if (target == null) {
+            return;
+        }
+        if (StringUtils.hasText(orgUid)) {
+            target.setOrgUid(orgUid);
+        }
+        if (StringUtils.hasText(userUid)) {
+            target.setUserUid(userUid);
+        }
+    }
+
+    private final WorkgroupSettingsRepository workgroupSettingsRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final UidUtils uidUtils;
+
+    private final ServiceSettingsHelper serviceSettingsHelper;
+
+    private final TriggerSettingsHelper triggerSettingsHelper;
+
+    private final MessageLeaveSettingsHelper messageLeaveSettingsHelper;
+
+    private final RobotRepository robotRepository;
+
+    private final WorkgroupRepository workgroupRepository;
+
+    private final RobotRoutingSettingsService workgroupAutoReplyConfigService;
+
+    // IMPORTANT: cache stores Entity only. Do not mix Response types in the same cache name/key.
+    // @Cacheable(value = "workgroupSettingsEntity", key = "#uid", unless = "#result == null")
+    @Override
+    public Optional<WorkgroupSettingsEntity> findByUid(String uid) {
+        return workgroupSettingsRepository.findByUid(uid);
+    }
+
+    @Override
+    @Transactional
+    public WorkgroupSettingsResponse create(WorkgroupSettingsRequest request) {
+        WorkgroupSettingsEntity entity = modelMapper.map(request, WorkgroupSettingsEntity.class);
+        entity.setUid(uidUtils.getUid());
+
+        final String orgUid = StringUtils.hasText(entity.getOrgUid()) ? entity.getOrgUid() : request.getOrgUid();
+        final String userUid = StringUtils.hasText(entity.getUserUid()) ? entity.getUserUid() : request.getUserUid();
+
+        ServiceSettingsEntity service = ServiceSettingsEntity.fromRequest(request.getServiceSettings(), modelMapper);
+        service.setUid(uidUtils.getUid());
+        syncOrgUser(service, orgUid, userUid);
+        entity.setServiceSettings(service);
+        ServiceSettingsEntity draft = ServiceSettingsEntity.fromRequest(request.getServiceSettings(), modelMapper);
+        draft.setUid(uidUtils.getUid());
+        syncOrgUser(draft, orgUid, userUid);
+        entity.setDraftServiceSettings(draft);
+
+        TriggerSettingsEntity trigger = TriggerSettingsEntity.fromRequest(request.getTriggerSettings(), modelMapper);
+        trigger.setUid(uidUtils.getUid());
+        syncOrgUser(trigger, orgUid, userUid);
+        if (request.getTriggerSettings() != null) {
+            triggerSettingsHelper.updateTriggerAssociationsIfPresent(trigger, request.getTriggerSettings());
+        }
+        entity.setTriggerSettings(trigger);
+        TriggerSettingsEntity triggerDraft = TriggerSettingsEntity.fromRequest(request.getTriggerSettings(), modelMapper);
+        triggerDraft.setUid(uidUtils.getUid());
+        syncOrgUser(triggerDraft, orgUid, userUid);
+        if (request.getTriggerSettings() != null) {
+            triggerSettingsHelper.updateTriggerAssociationsIfPresent(triggerDraft, request.getTriggerSettings());
+        }
+        entity.setDraftTriggerSettings(triggerDraft);
+
+        // 发布与草稿：邀请配置（统一使用 fromRequest，外部不再判空）
+        InviteSettingsEntity inv = InviteSettingsEntity.fromRequest(request.getInviteSettings(), modelMapper);
+        inv.setUid(uidUtils.getUid());
+        syncOrgUser(inv, orgUid, userUid);
+        entity.setInviteSettings(inv);
+        InviteSettingsEntity invDraft = InviteSettingsEntity.fromRequest(request.getInviteSettings(), modelMapper);
+        invDraft.setUid(uidUtils.getUid());
+        syncOrgUser(invDraft, orgUid, userUid);
+        entity.setDraftInviteSettings(invDraft);
+
+        // 发布与草稿：意图配置（统一使用 fromRequest，外部不再判空）
+        IntentionSettingsEntity inte = IntentionSettingsEntity.fromRequest(request.getIntentionSettings(), modelMapper);
+        inte.setUid(uidUtils.getUid());
+        syncOrgUser(inte, orgUid, userUid);
+        entity.setIntentionSettings(inte);
+        IntentionSettingsEntity inteDraft = IntentionSettingsEntity.fromRequest(request.getIntentionSettings(), modelMapper);
+        inteDraft.setUid(uidUtils.getUid());
+        syncOrgUser(inteDraft, orgUid, userUid);
+        entity.setDraftIntentionSettings(inteDraft);
+
+        // 发布与草稿：情绪配置（统一使用 fromRequest，外部不再判空）
+        EmotionSettingEntity emo = EmotionSettingEntity.fromRequest(request.getEmotionSettings(), modelMapper);
+        emo.setUid(uidUtils.getUid());
+        syncOrgUser(emo, orgUid, userUid);
+        entity.setEmotionSettings(emo);
+        EmotionSettingEntity emoDraft = EmotionSettingEntity.fromRequest(request.getEmotionSettings(), modelMapper);
+        emoDraft.setUid(uidUtils.getUid());
+        syncOrgUser(emoDraft, orgUid, userUid);
+        entity.setDraftEmotionSettings(emoDraft);
+
+        // 发布与草稿：会话小结配置（统一使用 fromRequest，内部已处理 null）
+        SummarySettingsEntity sum = SummarySettingsEntity.fromRequest(request.getSummarySettings(), modelMapper);
+        sum.setUid(uidUtils.getUid());
+        syncOrgUser(sum, orgUid, userUid);
+        entity.setSummarySettings(sum);
+        SummarySettingsEntity sumDraft = SummarySettingsEntity.fromRequest(request.getSummarySettings(), modelMapper);
+        sumDraft.setUid(uidUtils.getUid());
+        syncOrgUser(sumDraft, orgUid, userUid);
+        entity.setDraftSummarySettings(sumDraft);
+
+        // 发布与草稿：自动解决配置（统一使用 fromRequest，内部已处理 null）
+        AutoResolvedSettingsEntity autoResolved = AutoResolvedSettingsEntity.fromRequest(request.getAutoResolvedSettings(),
+            modelMapper);
+        autoResolved.setUid(uidUtils.getUid());
+        syncOrgUser(autoResolved, orgUid, userUid);
+        entity.setAutoResolvedSettings(autoResolved);
+        AutoResolvedSettingsEntity autoResolvedDraft = AutoResolvedSettingsEntity
+            .fromRequest(request.getAutoResolvedSettings(), modelMapper);
+        autoResolvedDraft.setUid(uidUtils.getUid());
+        syncOrgUser(autoResolvedDraft, orgUid, userUid);
+        entity.setDraftAutoResolvedSettings(autoResolvedDraft);
+
+        // 发布与草稿：留言设置
+        MessageLeaveSettingsEntity mls = MessageLeaveSettingsEntity.fromRequest(request.getMessageLeaveSettings(), modelMapper);
+        mls.setUid(uidUtils.getUid());
+        syncOrgUser(mls, orgUid, userUid);
+        entity.setMessageLeaveSettings(mls);
+        MessageLeaveSettingsEntity mlsDraft = MessageLeaveSettingsEntity.fromRequest(request.getMessageLeaveSettings(), modelMapper);
+        mlsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(mlsDraft, orgUid, userUid);
+        entity.setDraftMessageLeaveSettings(mlsDraft);
+
+        // 发布与草稿：工作时间设置
+        WorktimeSettingEntity worktimePublished = WorktimeSettingEntity.fromRequest(request.getWorktimeSettings(), modelMapper);
+        worktimePublished.setUid(uidUtils.getUid());
+        syncOrgUser(worktimePublished, orgUid, userUid);
+        entity.setWorktimeSettings(worktimePublished);
+        WorktimeSettingEntity worktimeDraft = WorktimeSettingEntity.fromRequest(request.getWorktimeSettings(), modelMapper);
+        worktimeDraft.setUid(uidUtils.getUid());
+        syncOrgUser(worktimeDraft, orgUid, userUid);
+        entity.setDraftWorktimeSettings(worktimeDraft);
+
+        // create 场景：不将 robotUid 解析成 RobotEntity，统一使用 Entity.fromRequest 风格
+        RobotRoutingSettingsEntity rrs = RobotRoutingSettingsEntity.fromRequest(request.getRobotRoutingSettings());
+        applyRobotUidToEntity(request.getRobotRoutingSettings(), rrs);
+        rrs.setUid(uidUtils.getUid());
+        syncOrgUser(rrs, orgUid, userUid);
+        entity.setRobotSettings(rrs);
+        RobotRoutingSettingsEntity rrsDraft = RobotRoutingSettingsEntity.fromRequest( request.getRobotRoutingSettings());
+        applyRobotUidToEntity(request.getRobotRoutingSettings(), rrsDraft);
+        rrsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(rrsDraft, orgUid, userUid);
+        entity.setDraftRobotSettings(rrsDraft);
+
+        // 发布与草稿：排队设置
+        QueueSettingsEntity qs = QueueSettingsEntity.fromRequest(request.getQueueSettings(), modelMapper);
+        qs.setUid(uidUtils.getUid());
+        syncOrgUser(qs, orgUid, userUid);
+        entity.setQueueSettings(qs);
+        QueueSettingsEntity qsDraft = QueueSettingsEntity.fromRequest(request.getQueueSettings(), modelMapper);
+        qsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(qsDraft, orgUid, userUid);
+        entity.setDraftQueueSettings(qsDraft);
+
+        // 发布与草稿：自动回复设置
+        AutoReplySettingsEntity ars = AutoReplySettingsEntity.fromRequest(request.getAutoReplySettings(), modelMapper);
+        ars.setUid(uidUtils.getUid());
+        syncOrgUser(ars, orgUid, userUid);
+        entity.setAutoReplySettings(ars);
+        AutoReplySettingsEntity arsDraft = AutoReplySettingsEntity.fromRequest(request.getAutoReplySettings(), modelMapper);
+        arsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(arsDraft, orgUid, userUid);
+        entity.setDraftAutoReplySettings(arsDraft);
+
+        // 发布与草稿：机器人转人工设置
+        RobotToAgentSettingsEntity rtas = RobotToAgentSettingsEntity.fromRequest(request.getRobotToAgentSettings(), modelMapper);
+        rtas.setUid(uidUtils.getUid());
+        syncOrgUser(rtas, orgUid, userUid);
+        entity.setRobotToAgentSettings(rtas);
+        RobotToAgentSettingsEntity rtasDraft = RobotToAgentSettingsEntity.fromRequest(request.getRobotToAgentSettings(), modelMapper);
+        rtasDraft.setUid(uidUtils.getUid());
+        syncOrgUser(rtasDraft, orgUid, userUid);
+        entity.setDraftRobotToAgentSettings(rtasDraft);
+
+        // 发布与草稿：WebRTC 设置
+        WebrtcSettingsEntity webrtc = mapWebrtcSettingsFromRequest(request.getWebrtcSettings());
+        webrtc.setUid(uidUtils.getUid());
+        syncOrgUser(webrtc, orgUid, userUid);
+        entity.setWebrtcSettings(webrtc);
+        WebrtcSettingsEntity webrtcDraft = mapWebrtcSettingsFromRequest(request.getWebrtcSettings());
+        webrtcDraft.setUid(uidUtils.getUid());
+        syncOrgUser(webrtcDraft, orgUid, userUid);
+        entity.setDraftWebrtcSettings(webrtcDraft);
+
+        // 如果请求或实体标记为默认，则保证同 org 仅一个默认
+        if (Boolean.TRUE.equals(request.getIsDefault()) || Boolean.TRUE.equals(entity.getIsDefault())) {
+            ensureSingleDefault(entity.getOrgUid(), entity);
+        }
+
+        WorkgroupSettingsEntity saved = save(entity);
+        evictAutoReplyConfigBySettingsUid(saved.getUid());
+        return convertToResponse(saved);
+    }
+
+    @Override
+    @Transactional
+    public WorkgroupSettingsResponse update(WorkgroupSettingsRequest request) {
+        Optional<WorkgroupSettingsEntity> optional = findByUid(request.getUid());
+        if (!optional.isPresent()) {
+            throw new RuntimeException("WorkgroupSettings not found: " + request.getUid());
+        }
+
+        WorkgroupSettingsEntity entity = optional.get();
+        // 使用 ModelMapper 批量更新基础字段
+        // modelMapper.map(request, entity);
+        if (StringUtils.hasText(request.getName())) {
+            entity.setName(request.getName());
+        }
+        if (request.getDescription() != null) {
+            entity.setDescription(request.getDescription());
+        }
+        if (request.getIsDefault() != null) {
+            entity.setIsDefault(request.getIsDefault());
+        }
+        if (request.getEnabled() != null) {
+            entity.setEnabled(request.getEnabled());
+        }
+        if (request.getRoutingMode() != null) {
+            entity.setRoutingMode(request.getRoutingMode());
+        }
+        if (request.getManualRoutingTip() != null) {
+            entity.setManualRoutingTip(request.getManualRoutingTip());
+        }
+        // AI 免责声明：与 RobotSettings 对称，挂在 WorkgroupSettings 顶层
+        if (request.getHideAIDisclaimer() != null) {
+            entity.setHideAIDisclaimer(request.getHideAIDisclaimer());
+        }
+        if (request.getAiDisclaimerText() != null) {
+            entity.setAiDisclaimerText(request.getAiDisclaimerText());
+        }
+        // 使用静态工厂方法更新嵌套设置,只在非 null 时更新
+        if (request.getServiceSettings() != null) {
+            ServiceSettingsEntity draft = entity.getDraftServiceSettings();
+            if (draft == null) {
+                draft = ServiceSettingsEntity.fromRequest(request.getServiceSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftServiceSettings(draft);
+                // 
+                ServiceSettingsEntity settings = ServiceSettingsEntity.fromRequest(request.getServiceSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setServiceSettings(settings);
+            } else {
+                // 保留草稿唯一标识，避免被请求体覆盖
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getServiceSettings(), draft);
+                ServiceSettingsEntity.applyRequestAliases(request.getServiceSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            // 处理 ServiceSettings 关联（FAQ 列表等）
+            serviceSettingsHelper.updateFaqAssociationsIfPresent(draft, request.getServiceSettings());
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getTriggerSettings() != null) {
+            TriggerSettingsEntity draft = entity.getDraftTriggerSettings();
+            if (draft == null) {
+                draft = TriggerSettingsEntity.fromRequest(request.getTriggerSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftTriggerSettings(draft);
+                //
+                TriggerSettingsEntity settings = TriggerSettingsEntity.fromRequest(request.getTriggerSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setTriggerSettings(settings);
+
+                triggerSettingsHelper.updateTriggerAssociationsIfPresent(draft, request.getTriggerSettings());
+                triggerSettingsHelper.updateTriggerAssociationsIfPresent(settings, request.getTriggerSettings());
+            } else {
+                triggerSettingsHelper.updateTriggerAssociationsIfPresent(draft, request.getTriggerSettings());
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        // 更新草稿：邀请/意图
+        if (request.getInviteSettings() != null) {
+            InviteSettingsEntity draft = entity.getDraftInviteSettings();
+            if (draft == null) {
+                draft = InviteSettingsEntity.fromRequest(request.getInviteSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftInviteSettings(draft);
+                // 
+                InviteSettingsEntity settings = InviteSettingsEntity.fromRequest(request.getInviteSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setInviteSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getInviteSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getIntentionSettings() != null) {
+            IntentionSettingsEntity draft = entity.getDraftIntentionSettings();
+            if (draft == null) {
+                draft = IntentionSettingsEntity.fromRequest(request.getIntentionSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftIntentionSettings(draft);
+                // 
+                IntentionSettingsEntity settings = IntentionSettingsEntity.fromRequest(request.getIntentionSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setIntentionSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getIntentionSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getEmotionSettings() != null) {
+            EmotionSettingEntity draft = entity.getDraftEmotionSettings();
+            if (draft == null) {
+                draft = EmotionSettingEntity.fromRequest(request.getEmotionSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftEmotionSettings(draft);
+                // 
+                EmotionSettingEntity settings = EmotionSettingEntity.fromRequest(request.getEmotionSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setEmotionSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getEmotionSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getSummarySettings() != null) {
+            SummarySettingsEntity draft = entity.getDraftSummarySettings();
+            if (draft == null) {
+                draft = SummarySettingsEntity.fromRequest(request.getSummarySettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftSummarySettings(draft);
+                // 
+                SummarySettingsEntity settings = SummarySettingsEntity.fromRequest(request.getSummarySettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setSummarySettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getSummarySettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getAutoResolvedSettings() != null) {
+            AutoResolvedSettingsEntity draft = entity.getDraftAutoResolvedSettings();
+            if (draft == null) {
+                draft = AutoResolvedSettingsEntity.fromRequest(request.getAutoResolvedSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftAutoResolvedSettings(draft);
+
+                AutoResolvedSettingsEntity settings = AutoResolvedSettingsEntity
+                        .fromRequest(request.getAutoResolvedSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setAutoResolvedSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getAutoResolvedSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getMessageLeaveSettings() != null) {
+            MessageLeaveSettingsEntity draft = entity.getDraftMessageLeaveSettings();
+            if (draft == null) {
+                draft = MessageLeaveSettingsEntity.fromRequest(request.getMessageLeaveSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftMessageLeaveSettings(draft);
+                // 
+                MessageLeaveSettingsEntity settings = MessageLeaveSettingsEntity.fromRequest(request.getMessageLeaveSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setMessageLeaveSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getMessageLeaveSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getWorktimeSettings() != null) {
+            WorktimeSettingEntity draft = entity.getDraftWorktimeSettings();
+            if (draft == null) {
+                draft = WorktimeSettingEntity.fromRequest(request.getWorktimeSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftWorktimeSettings(draft);
+                // 
+                WorktimeSettingEntity settings = WorktimeSettingEntity.fromRequest(request.getWorktimeSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setWorktimeSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getWorktimeSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getRobotRoutingSettings() != null) {
+            RobotRoutingSettingsEntity draft = entity.getDraftRobotSettings();
+            if (draft == null) {
+                draft = RobotRoutingSettingsEntity.fromRequest(request.getRobotRoutingSettings());
+                applyRobotUidToEntity(request.getRobotRoutingSettings(), draft);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftRobotSettings(draft);
+                // 
+            } else {
+                String originalUid = draft.getUid();
+                // 先用 mapper 覆盖简单字段
+                modelMapper.map(request.getRobotRoutingSettings(), draft);
+                // 再根据 robotUid 解析为 RobotEntity 进行关联
+                applyRobotUidToEntity(request.getRobotRoutingSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getQueueSettings() != null) {
+            QueueSettingsEntity draft = entity.getDraftQueueSettings();
+            if (draft == null) {
+                draft = QueueSettingsEntity.fromRequest(request.getQueueSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftQueueSettings(draft);
+                // 
+                QueueSettingsEntity settings = QueueSettingsEntity.fromRequest(request.getQueueSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setQueueSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getQueueSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getAutoReplySettings() != null) {
+            AutoReplySettingsEntity draft = entity.getDraftAutoReplySettings();
+            if (draft == null) {
+                draft = AutoReplySettingsEntity.fromRequest(request.getAutoReplySettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftAutoReplySettings(draft);
+                //
+                AutoReplySettingsEntity settings = AutoReplySettingsEntity.fromRequest(request.getAutoReplySettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setAutoReplySettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getAutoReplySettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getRobotToAgentSettings() != null) {
+            RobotToAgentSettingsEntity draft = entity.getDraftRobotToAgentSettings();
+            if (draft == null) {
+                draft = RobotToAgentSettingsEntity.fromRequest(request.getRobotToAgentSettings(), modelMapper);
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftRobotToAgentSettings(draft);
+                // 
+                RobotToAgentSettingsEntity settings = RobotToAgentSettingsEntity
+                        .fromRequest(request.getRobotToAgentSettings(), modelMapper);
+                settings.setUid(uidUtils.getUid());
+                entity.setRobotToAgentSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                modelMapper.map(request.getRobotToAgentSettings(), draft);
+                draft.setTriggerKeywords(request.getRobotToAgentSettings().getTriggerKeywords() != null
+                        ? new ArrayList<>(request.getRobotToAgentSettings().getTriggerKeywords())
+                        : new ArrayList<>());
+                RobotToAgentSettingsEntity.ensureDefaults(draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        if (request.getWebrtcSettings() != null) {
+            WebrtcSettingsEntity draft = entity.getDraftWebrtcSettings();
+            if (draft == null) {
+                draft = mapWebrtcSettingsFromRequest(request.getWebrtcSettings());
+                draft.setUid(uidUtils.getUid());
+                entity.setDraftWebrtcSettings(draft);
+
+                WebrtcSettingsEntity settings = mapWebrtcSettingsFromRequest(request.getWebrtcSettings());
+                settings.setUid(uidUtils.getUid());
+                entity.setWebrtcSettings(settings);
+            } else {
+                String originalUid = draft.getUid();
+                applyWebrtcSettingsRequestToEntity(request.getWebrtcSettings(), draft);
+                draft.setUid(originalUid);
+            }
+            entity.setHasUnpublishedChanges(true);
+        }
+
+        // 若本次更新将其设为默认，需取消同 org 其他默认
+        if (Boolean.TRUE.equals(request.getIsDefault()) || Boolean.TRUE.equals(entity.getIsDefault())) {
+            ensureSingleDefault(entity.getOrgUid(), entity);
+        }
+
+        WorkgroupSettingsEntity updated = save(entity);
+        evictAutoReplyConfigBySettingsUid(updated.getUid());
+        return convertToResponse(updated);
+    }
+
+    // @CacheEvict(value = "workgroupSettingsEntity", key = "#uid")
+    @Override
+    public void deleteByUid(String uid) {
+        Optional<WorkgroupSettingsEntity> optional = findByUid(uid);
+        if (optional.isPresent()) {
+            optional.get().setDeleted(true);
+            WorkgroupSettingsEntity saved = save(optional.get());
+            evictAutoReplyConfigBySettingsUid(saved.getUid());
+        }
+    }
+
+    @Override
+    public void delete(WorkgroupSettingsRequest request) {
+        deleteByUid(request.getUid());
+    }
+
+    @Transactional
+    public WorkgroupSettingsResponse enable(String uid) {
+        Optional<WorkgroupSettingsEntity> optional = findByUid(uid);
+        if (!optional.isPresent()) {
+            throw new RuntimeException("WorkgroupSettings not found: " + uid);
+        }
+        WorkgroupSettingsEntity entity = optional.get();
+        entity.setEnabled(true);
+        WorkgroupSettingsEntity updated = save(entity);
+        evictAutoReplyConfigBySettingsUid(updated.getUid());
+        return convertToResponse(updated);
+    }
+
+    @Transactional
+    public WorkgroupSettingsResponse disable(String uid) {
+        Optional<WorkgroupSettingsEntity> optional = findByUid(uid);
+        if (!optional.isPresent()) {
+            throw new RuntimeException("WorkgroupSettings not found: " + uid);
+        }
+        WorkgroupSettingsEntity entity = optional.get();
+        entity.setEnabled(false);
+        WorkgroupSettingsEntity updated = save(entity);
+        evictAutoReplyConfigBySettingsUid(updated.getUid());
+        return convertToResponse(updated);
+    }
+
+    @Override
+    protected Specification<WorkgroupSettingsEntity> createSpecification(WorkgroupSettingsRequest request) {
+        return WorkgroupSettingsSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<WorkgroupSettingsEntity> executePageQuery(Specification<WorkgroupSettingsEntity> spec,
+            Pageable pageable) {
+        return workgroupSettingsRepository.findAll(spec, pageable);
+    }
+
+    // @CachePut(value = "workgroupSettingsEntity", key = "#entity.uid", unless = "#result == null")
+    @Override
+    protected WorkgroupSettingsEntity doSave(WorkgroupSettingsEntity entity) {
+        return workgroupSettingsRepository.save(entity);
+    }
+
+    @Override
+    public WorkgroupSettingsEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            WorkgroupSettingsEntity entity) {
+        try {
+            Optional<WorkgroupSettingsEntity> latest = workgroupSettingsRepository.findByUid(entity.getUid());
+            if (latest.isPresent()) {
+                WorkgroupSettingsEntity latestEntity = latest.get();
+                // 合并需要保留的数据
+                return workgroupSettingsRepository.save(latestEntity);
+            }
+        } catch (Exception ex) {
+            throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+        }
+        return null;
+    }
+
+    /**
+     * Get or create default settings for organization
+     */
+    @Transactional
+    public WorkgroupSettingsEntity getOrCreateDefault(String orgUid) {
+        // 加锁读取，防止并发创建多个默认
+        Optional<WorkgroupSettingsEntity> defaultSettings = workgroupSettingsRepository
+                .findDefaultForUpdate(orgUid);
+        if (defaultSettings.isPresent()) {
+            return defaultSettings.get();
+        }
+
+        // Create default settings
+        WorkgroupSettingsEntity settings = WorkgroupSettingsEntity.builder()
+                .uid(uidUtils.getUid())
+                .name("默认工作组配置")
+                .description("系统默认工作组配置")
+                .isDefault(true)
+                .enabled(true)
+                .orgUid(orgUid)
+                .build();
+
+            final String userUid = settings.getUserUid();
+
+        // 参考 create()：为各嵌套配置初始化“发布 + 草稿”并分配独立 UID
+        // Service settings（发布 + 草稿）
+        ServiceSettingsEntity published = ServiceSettingsEntity.fromRequest(null, modelMapper);
+        published.setUid(uidUtils.getUid());
+            syncOrgUser(published, orgUid, userUid);
+        ServiceSettingsEntity draft = ServiceSettingsEntity.fromRequest(null, modelMapper);
+        draft.setUid(uidUtils.getUid());
+            syncOrgUser(draft, orgUid, userUid);
+        settings.setServiceSettings(published);
+        settings.setDraftServiceSettings(draft);
+
+        // Trigger settings（发布 + 草稿）
+        TriggerSettingsEntity triggerPublished = TriggerSettingsEntity.fromRequest(null, modelMapper);
+        triggerPublished.setUid(uidUtils.getUid());
+        syncOrgUser(triggerPublished, orgUid, userUid);
+        TriggerSettingsEntity triggerDraft = TriggerSettingsEntity.fromRequest(null, modelMapper);
+        triggerDraft.setUid(uidUtils.getUid());
+        syncOrgUser(triggerDraft, orgUid, userUid);
+        settings.setTriggerSettings(triggerPublished);
+        settings.setDraftTriggerSettings(triggerDraft);
+
+        // 邀请配置（发布 + 草稿）
+        InviteSettingsEntity inv = InviteSettingsEntity.fromRequest(null, modelMapper);
+        inv.setUid(uidUtils.getUid());
+        syncOrgUser(inv, orgUid, userUid);
+        InviteSettingsEntity invDraft = InviteSettingsEntity.fromRequest(null, modelMapper);
+        invDraft.setUid(uidUtils.getUid());
+        syncOrgUser(invDraft, orgUid, userUid);
+        settings.setInviteSettings(inv);
+        settings.setDraftInviteSettings(invDraft);
+
+        // 意图配置（发布 + 草稿）
+        IntentionSettingsEntity inte = IntentionSettingsEntity.fromRequest(null, modelMapper);
+        inte.setUid(uidUtils.getUid());
+        syncOrgUser(inte, orgUid, userUid);
+        IntentionSettingsEntity inteDraft = IntentionSettingsEntity.fromRequest(null, modelMapper);
+        inteDraft.setUid(uidUtils.getUid());
+        syncOrgUser(inteDraft, orgUid, userUid);
+        settings.setIntentionSettings(inte);
+        settings.setDraftIntentionSettings(inteDraft);
+
+        // 发布与草稿：情绪配置（统一使用 fromRequest，内部已处理 null）
+        EmotionSettingEntity emo = EmotionSettingEntity.fromRequest(null, modelMapper);
+        emo.setUid(uidUtils.getUid());
+        syncOrgUser(emo, orgUid, userUid);
+        settings.setEmotionSettings(emo);
+        EmotionSettingEntity emoDraft = EmotionSettingEntity.fromRequest(null, modelMapper);
+        emoDraft.setUid(uidUtils.getUid());
+        syncOrgUser(emoDraft, orgUid, userUid);
+        settings.setDraftEmotionSettings(emoDraft);
+
+        // 发布与草稿：会话小结配置（统一使用 fromRequest，内部已处理 null）
+        SummarySettingsEntity sum = SummarySettingsEntity.fromRequest(null, modelMapper);
+        sum.setUid(uidUtils.getUid());
+        syncOrgUser(sum, orgUid, userUid);
+        settings.setSummarySettings(sum);
+        SummarySettingsEntity sumDraft = SummarySettingsEntity.fromRequest(null, modelMapper);
+        sumDraft.setUid(uidUtils.getUid());
+        syncOrgUser(sumDraft, orgUid, userUid);
+        settings.setDraftSummarySettings(sumDraft);
+
+        // 自动解决配置（发布 + 草稿）
+        AutoResolvedSettingsEntity autoResolved = AutoResolvedSettingsEntity.fromRequest(null, modelMapper);
+        autoResolved.setUid(uidUtils.getUid());
+        syncOrgUser(autoResolved, orgUid, userUid);
+        settings.setAutoResolvedSettings(autoResolved);
+        AutoResolvedSettingsEntity autoResolvedDraft = AutoResolvedSettingsEntity.fromRequest(null, modelMapper);
+        autoResolvedDraft.setUid(uidUtils.getUid());
+        syncOrgUser(autoResolvedDraft, orgUid, userUid);
+        settings.setDraftAutoResolvedSettings(autoResolvedDraft);
+
+        // 留言设置（发布 + 草稿）
+        MessageLeaveSettingsEntity mls = MessageLeaveSettingsEntity.fromRequest(null, modelMapper);
+        mls.setUid(uidUtils.getUid());
+        syncOrgUser(mls, orgUid, userUid);
+        MessageLeaveSettingsEntity mlsDraft = MessageLeaveSettingsEntity.fromRequest(null, modelMapper);
+        mlsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(mlsDraft, orgUid, userUid);
+        settings.setMessageLeaveSettings(mls);
+        settings.setDraftMessageLeaveSettings(mlsDraft);
+
+        // 工作时间设置（发布 + 草稿）
+        WorktimeSettingEntity worktimePublished = WorktimeSettingEntity.fromRequest(null, modelMapper);
+        worktimePublished.setUid(uidUtils.getUid());
+        syncOrgUser(worktimePublished, orgUid, userUid);
+        WorktimeSettingEntity worktimeDraft = WorktimeSettingEntity.fromRequest(null, modelMapper);
+        worktimeDraft.setUid(uidUtils.getUid());
+        syncOrgUser(worktimeDraft, orgUid, userUid);
+        settings.setWorktimeSettings(worktimePublished);
+        settings.setDraftWorktimeSettings(worktimeDraft);
+
+        // 机器人路由设置（发布 + 草稿）
+        RobotRoutingSettingsEntity rrs = RobotRoutingSettingsEntity.fromRequest(null);
+        rrs.setUid(uidUtils.getUid());
+        syncOrgUser(rrs, orgUid, userUid);
+        RobotRoutingSettingsEntity rrsDraft = RobotRoutingSettingsEntity.fromRequest(null);
+        rrsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(rrsDraft, orgUid, userUid);
+        settings.setRobotSettings(rrs);
+        settings.setDraftRobotSettings(rrsDraft);
+
+        // 排队设置（发布 + 草稿）
+        QueueSettingsEntity qs = QueueSettingsEntity.fromRequest(null, modelMapper);
+        qs.setUid(uidUtils.getUid());
+        syncOrgUser(qs, orgUid, userUid);
+        QueueSettingsEntity qsDraft = QueueSettingsEntity.fromRequest(null, modelMapper);
+        qsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(qsDraft, orgUid, userUid);
+        settings.setQueueSettings(qs);
+        settings.setDraftQueueSettings(qsDraft);
+
+        // 自动回复设置（发布 + 草稿）
+        AutoReplySettingsEntity ars = AutoReplySettingsEntity.fromRequest(null, modelMapper);
+        ars.setUid(uidUtils.getUid());
+        syncOrgUser(ars, orgUid, userUid);
+        AutoReplySettingsEntity arsDraft = AutoReplySettingsEntity.fromRequest(null, modelMapper);
+        arsDraft.setUid(uidUtils.getUid());
+        syncOrgUser(arsDraft, orgUid, userUid);
+        settings.setAutoReplySettings(ars);
+        settings.setDraftAutoReplySettings(arsDraft);
+
+        RobotToAgentSettingsEntity rtas = RobotToAgentSettingsEntity.fromRequest(null, modelMapper);
+        rtas.setUid(uidUtils.getUid());
+        syncOrgUser(rtas, orgUid, userUid);
+        RobotToAgentSettingsEntity rtasDraft = RobotToAgentSettingsEntity.fromRequest(null, modelMapper);
+        rtasDraft.setUid(uidUtils.getUid());
+        syncOrgUser(rtasDraft, orgUid, userUid);
+        settings.setRobotToAgentSettings(rtas);
+        settings.setDraftRobotToAgentSettings(rtasDraft);
+
+        // WebRTC 设置（发布 + 草稿）
+        WebrtcSettingsEntity webrtcPublished = mapWebrtcSettingsFromRequest(null);
+        webrtcPublished.setUid(uidUtils.getUid());
+        syncOrgUser(webrtcPublished, orgUid, userUid);
+        WebrtcSettingsEntity webrtcDraft = mapWebrtcSettingsFromRequest(null);
+        webrtcDraft.setUid(uidUtils.getUid());
+        syncOrgUser(webrtcDraft, orgUid, userUid);
+        settings.setWebrtcSettings(webrtcPublished);
+        settings.setDraftWebrtcSettings(webrtcDraft);
+
+        // 刚创建的即为默认，确保同 org 唯一
+        ensureSingleDefault(orgUid, settings);
+        return save(settings);
+    }
+
+    /**
+     * Publish draft settings to online for workgroup
+     */
+    @Transactional
+    public WorkgroupSettingsResponse publish(String uid) {
+        Optional<WorkgroupSettingsEntity> optional = findByUid(uid);
+        if (!optional.isPresent()) {
+            throw new RuntimeException("WorkgroupSettings not found: " + uid);
+        }
+        WorkgroupSettingsEntity entity = optional.get();
+
+        // 复制草稿到发布版本
+        if (entity.getDraftServiceSettings() != null) {
+            ServiceSettingsEntity published = entity.getServiceSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftServiceSettings(), published);
+            } else {
+                ServiceSettingsEntity newPublished = new ServiceSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftServiceSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setServiceSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftTriggerSettings() != null) {
+            TriggerSettingsEntity published = entity.getTriggerSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftTriggerSettings(), published);
+            } else {
+                TriggerSettingsEntity newPublished = new TriggerSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftTriggerSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setTriggerSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftMessageLeaveSettings() != null) {
+            MessageLeaveSettingsEntity published = entity.getMessageLeaveSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftMessageLeaveSettings(), published);
+            } else {
+                MessageLeaveSettingsEntity newPublished = new MessageLeaveSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftMessageLeaveSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setMessageLeaveSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftWorktimeSettings() != null) {
+            WorktimeSettingEntity published = entity.getWorktimeSettings();
+            if (published != null) {
+                copyWorktimeSettings(entity.getDraftWorktimeSettings(), published);
+            } else {
+                WorktimeSettingEntity newPublished = new WorktimeSettingEntity();
+                copyWorktimeSettings(entity.getDraftWorktimeSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setWorktimeSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftRobotSettings() != null) {
+            RobotRoutingSettingsEntity published = entity.getRobotSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftRobotSettings(), published);
+            } else {
+                RobotRoutingSettingsEntity newPublished = new RobotRoutingSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftRobotSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setRobotSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftQueueSettings() != null) {
+            QueueSettingsEntity published = entity.getQueueSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftQueueSettings(), published);
+            } else {
+                QueueSettingsEntity newPublished = new QueueSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftQueueSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setQueueSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftAutoReplySettings() != null) {
+            AutoReplySettingsEntity published = entity.getAutoReplySettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftAutoReplySettings(), published);
+            } else {
+                AutoReplySettingsEntity newPublished = new AutoReplySettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftAutoReplySettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setAutoReplySettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftRobotToAgentSettings() != null) {
+            RobotToAgentSettingsEntity published = entity.getRobotToAgentSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftRobotToAgentSettings(), published);
+            } else {
+                RobotToAgentSettingsEntity newPublished = new RobotToAgentSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftRobotToAgentSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setRobotToAgentSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftWebrtcSettings() != null) {
+            WebrtcSettingsEntity published = entity.getWebrtcSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftWebrtcSettings(), published);
+            } else {
+                WebrtcSettingsEntity newPublished = new WebrtcSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftWebrtcSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setWebrtcSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftInviteSettings() != null) {
+            InviteSettingsEntity published = entity.getInviteSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftInviteSettings(), published);
+            } else {
+                InviteSettingsEntity newPublished = new InviteSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftInviteSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setInviteSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftIntentionSettings() != null) {
+            IntentionSettingsEntity published = entity.getIntentionSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftIntentionSettings(), published);
+            } else {
+                IntentionSettingsEntity newPublished = new IntentionSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftIntentionSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setIntentionSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftEmotionSettings() != null) {
+            EmotionSettingEntity published = entity.getEmotionSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftEmotionSettings(), published);
+            } else {
+                EmotionSettingEntity newPublished = new EmotionSettingEntity();
+                copyPropertiesExcludingIds(entity.getDraftEmotionSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setEmotionSettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftSummarySettings() != null) {
+            SummarySettingsEntity published = entity.getSummarySettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftSummarySettings(), published);
+            } else {
+                SummarySettingsEntity newPublished = new SummarySettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftSummarySettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setSummarySettings(newPublished);
+            }
+        }
+
+        if (entity.getDraftAutoResolvedSettings() != null) {
+            AutoResolvedSettingsEntity published = entity.getAutoResolvedSettings();
+            if (published != null) {
+                copyPropertiesExcludingIds(entity.getDraftAutoResolvedSettings(), published);
+            } else {
+                AutoResolvedSettingsEntity newPublished = new AutoResolvedSettingsEntity();
+                copyPropertiesExcludingIds(entity.getDraftAutoResolvedSettings(), newPublished);
+                newPublished.setUid(uidUtils.getUid());
+                entity.setAutoResolvedSettings(newPublished);
+            }
+        }
+
+        entity.setHasUnpublishedChanges(false);
+        entity.setPublishedAt(java.time.ZonedDateTime.now());
+        WorkgroupSettingsEntity updated = save(entity);
+        evictAutoReplyConfigBySettingsUid(updated.getUid());
+        return convertToResponse(updated);
+    }
+
+    private void evictAutoReplyConfigBySettingsUid(String settingsUid) {
+        if (!StringUtils.hasText(settingsUid)) {
+            return;
+        }
+        workgroupRepository.findUidsBySettingsUid(settingsUid)
+                .stream()
+                .filter(StringUtils::hasText)
+                .forEach(workgroupAutoReplyConfigService::evictByWorkgroupUid);
+    }
+
+    // 仅复制业务字段,忽略 id/uid/version 与时间字段
+    // 使用 Helper 类处理懒加载集合的正确复制
+    private void copyPropertiesExcludingIds(Object source, Object target) {
+        if (source instanceof ServiceSettingsEntity && target instanceof ServiceSettingsEntity) {
+            serviceSettingsHelper.copyServiceSettingsProperties((ServiceSettingsEntity) source,
+                    (ServiceSettingsEntity) target);
+        } else if (source instanceof TriggerSettingsEntity && target instanceof TriggerSettingsEntity) {
+            // triggerSettingsHelper.copyTriggerSettingsProperties((TriggerSettingsEntity) source,
+            //         (TriggerSettingsEntity) target);
+        } else if (source instanceof MessageLeaveSettingsEntity && target instanceof MessageLeaveSettingsEntity) {
+            messageLeaveSettingsHelper.copyMessageLeaveSettingsProperties((MessageLeaveSettingsEntity) source,
+                    (MessageLeaveSettingsEntity) target);
+        } else if (source instanceof RobotToAgentSettingsEntity && target instanceof RobotToAgentSettingsEntity) {
+            messageLeaveSettingsHelper.copyPropertiesExcludingIds(source, target);
+            RobotToAgentSettingsEntity sourceSettings = (RobotToAgentSettingsEntity) source;
+            RobotToAgentSettingsEntity targetSettings = (RobotToAgentSettingsEntity) target;
+            targetSettings.setTriggerKeywords(sourceSettings.getTriggerKeywords() != null
+                    ? new ArrayList<>(sourceSettings.getTriggerKeywords())
+                    : new ArrayList<>());
+            RobotToAgentSettingsEntity.ensureDefaults(targetSettings);
+        } else {
+            messageLeaveSettingsHelper.copyPropertiesExcludingIds(source, target);
+        }
+    }
+
+    private void copyWorktimeSettings(WorktimeSettingEntity source, WorktimeSettingEntity target) {
+        messageLeaveSettingsHelper.copyPropertiesExcludingIds(source, target);
+    }
+
+    /**
+     * 根据请求中的 robotUid 解析并设置到目标实体上；若为空则清空关联。
+     */
+    private void applyRobotUidToEntity(RobotRoutingSettingsRequest request, RobotRoutingSettingsEntity target) {
+        if (request == null || target == null) {
+            return;
+        }
+        String robotUid = request.getRobotUid();
+        if (robotUid == null || robotUid.isBlank()) {
+            // 允许通过传空来移除关联机器人
+            target.setRobot(null);
+            return;
+        }
+        RobotEntity robot = robotRepository.findByUid(robotUid)
+                .orElseThrow(() -> new RuntimeException("Robot not found by uid: " + robotUid));
+        target.setRobot(robot);
+    }
+
+    private WebrtcSettingsEntity mapWebrtcSettingsFromRequest(WebrtcSettingsRequest request) {
+        WebrtcSettingsEntity entity = modelMapper.map(
+                request != null ? request : WebrtcSettingsRequest.builder().build(),
+                WebrtcSettingsEntity.class);
+        applyWebrtcSettingsRequestToEntity(request, entity);
+        return entity;
+    }
+
+    private void applyWebrtcSettingsRequestToEntity(WebrtcSettingsRequest request, WebrtcSettingsEntity target) {
+        if (target == null || request == null) {
+            return;
+        }
+        if (request.getDefaultVoiceAgent() != null) {
+            target.setDefaultVoiceAgent(request.getDefaultVoiceAgent());
+        }
+    }
+
+    @Override
+    public WorkgroupSettingsResponse convertToResponse(WorkgroupSettingsEntity entity) {
+        // 注意：Entity 与 Response 的字段命名不一致：
+        // - Entity: robotSettings / draftRobotSettings
+        // - Response: robotRoutingSettings / draftRobotRoutingSettings
+        // 直接使用 ModelMapper 会导致这两个字段为 null，这里手动补齐映射。
+        WorkgroupSettingsResponse resp = modelMapper.map(entity, WorkgroupSettingsResponse.class);
+        resp.setServiceSettings(com.bytedesk.kbase.settings_service.ServiceSettingsResponse.fromEntity(entity.getServiceSettings()));
+        resp.setDraftServiceSettings(com.bytedesk.kbase.settings_service.ServiceSettingsResponse.fromEntity(entity.getDraftServiceSettings()));
+        resp.setAutoResolvedSettings(
+            com.bytedesk.kbase.settings_auto_resolved.AutoResolvedSettingsResponse.fromEntity(
+                entity.getAutoResolvedSettings()));
+        resp.setDraftAutoResolvedSettings(
+            com.bytedesk.kbase.settings_auto_resolved.AutoResolvedSettingsResponse.fromEntity(
+                entity.getDraftAutoResolvedSettings()));
+
+        // 机器人路由（发布）
+        if (entity.getRobotSettings() != null) {
+            resp.setRobotRoutingSettings(modelMapper.map(entity.getRobotSettings(),
+                    com.bytedesk.ai.robot.settings.RobotRoutingSettingsResponse.class));
+        } else {
+            resp.setRobotRoutingSettings(modelMapper.map(RobotRoutingSettingsEntity.builder().uid(uidUtils.getUid()).build(), 
+                com.bytedesk.ai.robot.settings.RobotRoutingSettingsResponse.class));
+        }
+
+        // 机器人路由（草稿）
+        if (entity.getDraftRobotSettings() != null) {
+            resp.setDraftRobotRoutingSettings(modelMapper.map(entity.getDraftRobotSettings(),
+                    com.bytedesk.ai.robot.settings.RobotRoutingSettingsResponse.class));
+        } else {
+            resp.setDraftRobotRoutingSettings(modelMapper.map(RobotRoutingSettingsEntity.builder().uid(uidUtils.getUid()).build(), 
+                com.bytedesk.ai.robot.settings.RobotRoutingSettingsResponse.class));
+        }
+
+        if (entity.getRobotToAgentSettings() != null) {
+            resp.setRobotToAgentSettings(modelMapper.map(entity.getRobotToAgentSettings(),
+                    com.bytedesk.service.robot_to_agent_settings.RobotToAgentSettingsResponse.class));
+        } else {
+            resp.setRobotToAgentSettings(modelMapper.map(RobotToAgentSettingsEntity.builder().uid(uidUtils.getUid()).build(), 
+                com.bytedesk.service.robot_to_agent_settings.RobotToAgentSettingsResponse.class));
+        }
+
+        if (entity.getDraftRobotToAgentSettings() != null) {
+            resp.setDraftRobotToAgentSettings(modelMapper.map(entity.getDraftRobotToAgentSettings(),
+                    com.bytedesk.service.robot_to_agent_settings.RobotToAgentSettingsResponse.class));
+        } else {
+            resp.setDraftRobotToAgentSettings(modelMapper.map(RobotToAgentSettingsEntity.builder().uid(uidUtils.getUid()).build(), 
+                com.bytedesk.service.robot_to_agent_settings.RobotToAgentSettingsResponse.class));
+        }
+
+        if (entity.getAutoReplySettings() != null) {
+            resp.setAutoReplySettings(modelMapper.map(entity.getAutoReplySettings(),
+                    com.bytedesk.kbase.auto_reply.settings.AutoReplySettingsResponse.class));
+        } else {
+            AutoReplySettingsEntity defaultAutoReply = AutoReplySettingsEntity.builder().build();
+            defaultAutoReply.setUid(uidUtils.getUid());
+            resp.setAutoReplySettings(modelMapper.map(defaultAutoReply,
+                    com.bytedesk.kbase.auto_reply.settings.AutoReplySettingsResponse.class));
+        }
+
+        if (entity.getDraftAutoReplySettings() != null) {
+            resp.setDraftAutoReplySettings(modelMapper.map(entity.getDraftAutoReplySettings(),
+                    com.bytedesk.kbase.auto_reply.settings.AutoReplySettingsResponse.class));
+        } else {
+            AutoReplySettingsEntity defaultDraftAutoReply = AutoReplySettingsEntity.builder().build();
+            defaultDraftAutoReply.setUid(uidUtils.getUid());
+            resp.setDraftAutoReplySettings(modelMapper.map(defaultDraftAutoReply,
+                    com.bytedesk.kbase.auto_reply.settings.AutoReplySettingsResponse.class));
+        }
+
+        return resp;
+    }
+
+    /**
+     * 保证同一个 orgUid 下仅有一个 isDefault=true。
+     * 在事务内使用，借助悲观锁串行化并发修改。
+     */
+    private void ensureSingleDefault(String orgUid, WorkgroupSettingsEntity target) {
+        if (orgUid == null) {
+            return;
+        }
+        Optional<WorkgroupSettingsEntity> existingOpt = workgroupSettingsRepository.findDefaultForUpdate(orgUid);
+        if (existingOpt.isPresent()) {
+            WorkgroupSettingsEntity existing = existingOpt.get();
+            if (!existing.getUid().equals(target.getUid())) {
+                existing.setIsDefault(false);
+                save(existing);
+            }
+        }
+        target.setIsDefault(true);
+    }
+
+}

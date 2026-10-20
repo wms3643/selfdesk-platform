@@ -1,0 +1,167 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-05-11 18:25:36
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-20 17:05:57
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.task;
+
+import org.springframework.data.domain.Page;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.context.annotation.Description;
+
+import com.bytedesk.core.annotation.ActionAnnotation;
+import com.bytedesk.core.base.BaseRestController;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.utils.JsonResult;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.AllArgsConstructor;
+
+@RestController
+@RequestMapping("/api/v1/task")
+@AllArgsConstructor
+@Tag(name = "Task Management", description = "Task management APIs for organizing and categorizing content with tasks")
+@Description("Task Management Controller - Content taskging and categorization APIs")
+public class TaskRestController extends BaseRestController<TaskRequest, TaskRestService> {
+
+    private final TaskRestService taskRestService;
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_QUERY_ORG, description = "query task by org")
+    @Operation(summary = "Query Tasks by Organization", description = "Retrieve tasks for the current organization")
+    @PreAuthorize(TaskPermissions.HAS_TASK_READ)
+    @Override
+    @GetMapping("/query/org")
+    public ResponseEntity<?> queryByOrg(TaskRequest request) {
+        
+        Page<TaskResponse> tasks = taskRestService.queryByOrg(request);
+
+        return ResponseEntity.ok(JsonResult.success(tasks));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_QUERY_USER, description = "query task by user")
+    @Operation(summary = "Query Tasks by User", description = "Retrieve tasks for the current user")
+    @PreAuthorize(TaskPermissions.HAS_TASK_READ)
+    @Override
+    @GetMapping({"/query", "/query/user"})
+    public ResponseEntity<?> queryByUser(TaskRequest request) {
+        
+        Page<TaskResponse> tasks = taskRestService.queryByUser(request);
+
+        return ResponseEntity.ok(JsonResult.success(tasks));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_QUERY_DETAIL, description = "query task by uid")
+    @Operation(summary = "Query Task by UID", description = "Retrieve a specific task by its unique identifier")
+    @PreAuthorize(TaskPermissions.HAS_TASK_READ)
+    @Override
+    @GetMapping("/query/uid")
+    public ResponseEntity<?> queryByUid(TaskRequest request) {
+        
+        TaskResponse task = taskRestService.queryByUid(request);
+
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_CREATE, description = "create task")
+    @Operation(summary = "Create Task", description = "Create a new task")
+    @Override
+    @PreAuthorize(TaskPermissions.HAS_TASK_CREATE)
+    @PostMapping("/create")
+    public ResponseEntity<?> create(@RequestBody TaskRequest request) {
+        
+        TaskResponse task = taskRestService.create(request);
+
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_UPDATE, description = "update task")
+    @Operation(summary = "Update Task", description = "Update an existing task")
+    @Override
+    @PreAuthorize(TaskPermissions.HAS_TASK_UPDATE)
+    @PostMapping("/update")
+    public ResponseEntity<?> update(@RequestBody TaskRequest request) {
+        
+        TaskResponse task = taskRestService.update(request);
+
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_DELETE, description = "delete task")
+    @Operation(summary = "Delete Task", description = "Delete a task")
+    @Override
+    @PreAuthorize(TaskPermissions.HAS_TASK_DELETE)
+    @PostMapping("/delete")
+    public ResponseEntity<?> delete(@RequestBody TaskRequest request) {
+        
+        taskRestService.delete(request);
+
+        return ResponseEntity.ok(JsonResult.success());
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_EXPORT, description = "export task")
+    @Operation(summary = "Export Tasks", description = "Export tasks to Excel format")
+    @Override
+    @PreAuthorize(TaskPermissions.HAS_TASK_EXPORT)
+    @GetMapping("/export")
+    public Object export(TaskRequest request, HttpServletResponse response) {
+        return exportTemplate(
+            request,
+            response,
+            taskRestService,
+            TaskExcel.class,
+            "Task",
+            "task"
+        );
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_LIKE, description = "like task")
+    @Operation(summary = "Like Task", description = "Like a task (idempotent)")
+    @PostMapping("/like")
+    public ResponseEntity<?> like(@RequestBody TaskRequest request) {
+        TaskResponse task = taskRestService.like(request);
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_UNLIKE, description = "unlike task")
+    @Operation(summary = "Unlike Task", description = "Cancel like for a task (idempotent)")
+    @PostMapping("/unlike")
+    public ResponseEntity<?> unlike(@RequestBody TaskRequest request) {
+        TaskResponse task = taskRestService.unlike(request);
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_FAVORITE, description = "favorite task")
+    @Operation(summary = "Favorite Task", description = "Favorite/collect a task (idempotent)")
+    @PostMapping("/favorite")
+    public ResponseEntity<?> favorite(@RequestBody TaskRequest request) {
+        TaskResponse task = taskRestService.favorite(request);
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_TASK, action = I18Consts.I18N_ACTION_UNFAVORITE, description = "unfavorite task")
+    @Operation(summary = "Unfavorite Task", description = "Cancel favorite/collect for a task (idempotent)")
+    @PostMapping("/unfavorite")
+    public ResponseEntity<?> unfavorite(@RequestBody TaskRequest request) {
+        TaskResponse task = taskRestService.unfavorite(request);
+        return ResponseEntity.ok(JsonResult.success(task));
+    }
+
+    
+    
+}

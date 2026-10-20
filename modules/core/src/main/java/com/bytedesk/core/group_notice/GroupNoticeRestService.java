@@ -1,0 +1,153 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-05-11 18:25:45
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-20 13:51:45
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.group_notice;
+
+import java.util.Optional;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+
+import com.bytedesk.core.base.BaseRestService;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.uid.UidUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class GroupNoticeRestService extends BaseRestService<GroupNoticeEntity, GroupNoticeRequest, GroupNoticeResponse> {
+
+    private final GroupNoticeRepository group_noticeRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final UidUtils uidUtils;
+
+    @Override
+    protected Specification<GroupNoticeEntity> createSpecification(GroupNoticeRequest request) {
+        return GroupNoticeSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<GroupNoticeEntity> executePageQuery(Specification<GroupNoticeEntity> spec, Pageable pageable) {
+        return group_noticeRepository.findAll(spec, pageable);
+    }
+
+    @Cacheable(value = "group_notice", key = "#uid", unless="#result==null")
+    @Override
+    public Optional<GroupNoticeEntity> findByUid(String uid) {
+        return group_noticeRepository.findByUid(uid);
+    }
+
+    @Override
+    public GroupNoticeResponse create(GroupNoticeRequest request) {
+        UserEntity user = authService.getUser();
+        
+        request.setUserUid(user.getUid());
+        
+        GroupNoticeEntity entity = modelMapper.map(request, GroupNoticeEntity.class);
+        entity.setUid(uidUtils.getUid());
+        // 
+        entity.setOrgUid(user.getOrgUid());
+
+        GroupNoticeEntity savedEntity = save(entity);
+        if (savedEntity == null) {
+            throw new RuntimeException(I18Consts.I18N_CREATE_FAILED);
+        }
+        return convertToResponse(savedEntity);
+    }
+
+    @Override
+    public GroupNoticeResponse update(GroupNoticeRequest request) {
+        Optional<GroupNoticeEntity> optional = group_noticeRepository.findByUid(request.getUid());
+        if (optional.isPresent()) {
+            GroupNoticeEntity entity = optional.get();
+            modelMapper.map(request, entity);
+            //
+            GroupNoticeEntity savedEntity = save(entity);
+            if (savedEntity == null) {
+                throw new RuntimeException(I18Consts.I18N_UPDATE_FAILED);
+            }
+            return convertToResponse(savedEntity);
+        }
+        else {
+            throw new RuntimeException(I18Consts.I18N_RESOURCE_NOT_FOUND);
+        }
+    }
+    
+    @Override
+    public GroupNoticeEntity save(GroupNoticeEntity entity) {
+        log.info("Attempting to save group_notice: {}", entity.getName());
+        try {
+            return doSave(entity);
+        } catch (ObjectOptimisticLockingFailureException e) {
+            handleOptimisticLockingFailureException(e, entity);
+        }
+        return null;
+    }
+
+    @Override
+    protected GroupNoticeEntity doSave(GroupNoticeEntity entity) {
+        return group_noticeRepository.save(entity);
+    }
+
+    @Override
+    public void deleteByUid(String uid) {
+        Optional<GroupNoticeEntity> optional = group_noticeRepository.findByUid(uid);
+        if (optional.isPresent()) {
+            optional.get().setDeleted(true);
+            save(optional.get());
+            // group_noticeRepository.delete(optional.get());
+        }
+        else {
+            throw new RuntimeException(I18Consts.I18N_RESOURCE_NOT_FOUND);
+        }
+    }
+
+    @Override
+    public void delete(GroupNoticeRequest request) {
+        deleteByUid(request.getUid());
+    }
+
+    @Override
+    public GroupNoticeEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e, GroupNoticeEntity entity) {
+        // 乐观锁处理实现
+        try {
+            Optional<GroupNoticeEntity> latest = group_noticeRepository.findByUid(entity.getUid());
+            if (latest.isPresent()) {
+                GroupNoticeEntity latestEntity = latest.get();
+                // 合并需要保留的数据
+                // 这里可以根据业务需求合并实体
+                return group_noticeRepository.save(latestEntity);
+            }
+        } catch (Exception ex) {
+            throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+        }
+        return null;
+    }
+
+    @Override
+    public GroupNoticeResponse convertToResponse(GroupNoticeEntity entity) {
+        return modelMapper.map(entity, GroupNoticeResponse.class);
+    }
+    
+}

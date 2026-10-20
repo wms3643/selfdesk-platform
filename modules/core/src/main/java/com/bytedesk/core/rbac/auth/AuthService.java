@@ -1,0 +1,423 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-03 17:43:54
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.auth;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.enums.ChannelEnum;
+import com.bytedesk.core.exception.MemberForceLogoutException;
+import com.bytedesk.core.exception.OrgMaxMembersExceededException;
+import com.bytedesk.core.member.MemberRepository;
+import com.bytedesk.core.rbac.token.TokenRequest;
+import com.bytedesk.core.rbac.token.TokenTypeEnum;
+import com.bytedesk.core.rbac.token.TokenEntity;
+import com.bytedesk.core.rbac.token.TokenRepository;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserConvertUtils;
+import com.bytedesk.core.rbac.user.UserDetailsImpl;
+import com.bytedesk.core.rbac.user.UserDetailsServiceImpl;
+import com.bytedesk.core.rbac.user.UserResponse;
+import com.bytedesk.core.rbac.organization.OrganizationEntity;
+import com.bytedesk.core.rbac.organization.OrganizationRepository;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.utils.JwtUtils;
+import com.bytedesk.core.utils.PasswordCryptoUtils;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.utils.BdDateUtils;
+
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * https://www.baeldung.com/get-user-in-spring-security
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class AuthService {
+
+    private final UserDetailsServiceImpl userDetailsService;
+
+    private final ModelMapper modelMapper;
+
+    private final TokenRepository tokenRepository;
+
+    private final OrganizationRepository organizationRepository;
+
+    private final MemberRepository memberRepository;
+
+    private final UidUtils uidUtils;
+
+    private final BCryptPasswordEncoder passwordEncoder;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    public UserEntity getUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return null;
+        }
+
+        Object principal = authentication.getPrincipal();
+        if (principal == null) {
+            return null;
+        }
+
+        // 常见情况：未登录/匿名访问时 principal 可能是 String（例如 anonymousUser）
+        if (principal instanceof UserDetailsImpl userDetails) {
+            return modelMapper.map(userDetails, UserEntity.class);
+        }
+        if (principal instanceof UserDetails userDetails) {
+            // 兼容其它实现的 UserDetails
+            return modelMapper.map(userDetails, UserEntity.class);
+        }
+
+        // 未登录/匿名访问：principal 可能是 String（例如 anonymousUser）
+        if (principal instanceof String) {
+            return null;
+        }
+
+        // 其它类型（例如 String）视为未登录，避免刷 ClassCastException 日志
+        log.debug("Unexpected principal type: {}", principal.getClass().getName());
+        return null;
+    }
+
+    public UserEntity getCurrentUser() {
+        return getUser();
+    }
+
+    /**
+     * 当前登录用户是否为组织管理员（ROLE_ADMIN）或超级管理员（superUser / ROLE_SUPER）。
+     * 用于成员管理等"仅管理员可操作他人"接口的收缩判断，与前端 access.canAdmin() 逻辑对齐。
+     * 注意：角色别名机制（UserConvertUtils.addRoleAliasAuthorities）会同时授予
+     * ROLE_ADMIN/ADMIN（以及 ROLE_SUPER/SUPER）两种形式，这里两种都识别。
+     */
+    public boolean isOrgAdminOrSuperUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        Object principal = authentication.getPrincipal();
+        if (principal instanceof UserDetailsImpl userDetails
+                && Boolean.TRUE.equals(userDetails.getSuperUser())) {
+            return true;
+        }
+        for (GrantedAuthority authority : authentication.getAuthorities()) {
+            if (authority == null || !StringUtils.hasText(authority.getAuthority())) {
+                continue;
+            }
+            switch (authority.getAuthority()) {
+                case "ROLE_ADMIN":
+                case "ADMIN":
+                case "ROLE_SUPER":
+                case "SUPER":
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 判断给定 userUid 是否为当前登录用户本人
+     */
+    public boolean isSelfUserUid(String userUid) {
+        if (!StringUtils.hasText(userUid)) {
+            return false;
+        }
+        UserEntity currentUser = getUser();
+        return currentUser != null && userUid.equals(currentUser.getUid());
+    }
+
+    public UsernamePasswordAuthenticationToken getAuthentication(HttpServletRequest request, String subject) {
+
+        UserDetails userDetails = userDetailsService.loadUserByUsernameAndPlatform(subject);
+
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                userDetails,
+                null,
+                userDetails.getAuthorities());
+        authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+        //
+        return authentication;
+    }
+
+    public AuthToken authenticationWithMobileAndPlatform(String mobile, String country, String platform, String client, String device) {
+        UserDetailsImpl userDetails = userDetailsService.loadUserByMobileAndPlatform(mobile, country, platform);
+        userDetails.setChannel(client);
+        userDetails.setDevice(device);
+        return new AuthToken(userDetails);
+    }
+
+    public AuthToken authenticationWithEmailAndPlatform(String email, String platform, String client, String device) {
+        UserDetailsImpl userDetails = userDetailsService.loadUserByEmailAndPlatform(email, platform);
+        userDetails.setChannel(client);
+        userDetails.setDevice(device);
+        return new AuthToken(userDetails);
+    }
+
+    public AuthResponse formatResponse(AuthRequest authRequest, Authentication authentication) {
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
+
+        // 成员被管理员禁用后，拒绝登录（覆盖所有登录入口），确保禁用后无法登录任何前端
+        enforceMemberNotForceLogoutIfNeeded(userDetails);
+
+        UserResponse userResponse = UserConvertUtils.convertToUserResponse(userDetails);
+
+        // 登录成功后，将生成的accessToken同时保存到数据库中
+        String channel = authRequest.getChannel();
+        if (!StringUtils.hasText(channel)) {
+            channel = ChannelEnum.WEB.name();
+        }
+
+        String accessToken = JwtUtils.generateJwtToken(userDetails.getUsername(), userDetails.getPlatform(), channel);
+
+        // 性能测试模式：避免每次登录都写token表，减少DB写压力
+        if (bytedeskProperties.isDisableIpFilter()) {
+            return AuthResponse.builder()
+                .accessToken(accessToken)
+                .user(userResponse)
+                .build();
+        }
+
+        // --- Organization maxMembers login enforcement (dedupe multi-device by userUid) ---
+        enforceOrganizationMaxMembersIfNeeded(userDetails);
+        
+        String device = authRequest.getDevice();
+        if (!StringUtils.hasText(device)) {
+            // 如果没有设备信息，使用一个描述性值
+            device = "Unknown Device";
+        }
+
+        String displayName = StringUtils.hasText(userDetails.getNickname()) ? userDetails.getNickname()
+            : userDetails.getUsername();
+        String account = StringUtils.hasText(userDetails.getMobile()) ? userDetails.getMobile()
+            : (StringUtils.hasText(userDetails.getEmail()) ? userDetails.getEmail() : userDetails.getUsername());
+        
+        // 使用create接口创建保存token
+        TokenRequest tokenRequest = TokenRequest.builder()
+            .name(displayName)
+            .description(String.format("login token for %s(uid=%s, org=%s), platform=%s, channel=%s, device=%s",
+                    account,
+                    userDetails.getUid(),
+                    userDetails.getOrgUid(),
+                    userDetails.getPlatform(),
+                    channel,
+                    device))
+            .accessToken(accessToken)
+            .type(TokenTypeEnum.BEARER.name())
+            .revoked(false)
+            .channel(channel)
+            .device(device)
+            .userUid(userDetails.getUid())
+            .orgUid(userDetails.getOrgUid())
+            .build();
+
+        // 直接写 token 表，避免 AuthService <-> TokenRestService 循环依赖
+        TokenEntity tokenEntity = modelMapper.map(tokenRequest, TokenEntity.class);
+        tokenEntity.setUid(uidUtils.getUid());
+        tokenEntity.setLastActiveAt(BdDateUtils.now());
+        if (!Boolean.TRUE.equals(tokenEntity.getPermanent()) && tokenEntity.getExpiresAt() == null) {
+            tokenEntity.setExpiresAt(JwtUtils.calculateExpirationTime(tokenRequest.getChannel()));
+        }
+        tokenRepository.save(tokenEntity);
+        
+        return AuthResponse.builder()
+                .accessToken(accessToken)
+                .user(userResponse)
+                .build();
+    }
+
+    /**
+     * 成员被管理员禁用（forceLogout）后禁止登录。
+     * - 超级管理员不受限制；
+     * - 仅检查当前组织的成员记录（禁用是组织级语义，不影响用户在其他组织的登录）；
+     * - 找不到成员记录时不拦截（如平台级用户未加入组织成员表）。
+     */
+    private void enforceMemberNotForceLogoutIfNeeded(UserDetailsImpl userDetails) {
+        if (userDetails == null) {
+            return;
+        }
+
+        // Super user should always be allowed to log in.
+        if (Boolean.TRUE.equals(userDetails.getSuperUser())) {
+            return;
+        }
+
+        final String orgUid = userDetails.getOrgUid();
+        final String userUid = userDetails.getUid();
+        if (!StringUtils.hasText(orgUid) || !StringUtils.hasText(userUid)) {
+            return;
+        }
+
+        memberRepository.findByUser_UidAndOrgUidAndDeletedFalse(userUid, orgUid)
+                .filter(member -> Boolean.TRUE.equals(member.getForceLogout()))
+                .ifPresent(member -> {
+                    String reason = StringUtils.hasText(member.getForceLogoutReason())
+                            ? member.getForceLogoutReason()
+                            : I18Consts.I18N_FORCE_LOGOUT_REASON;
+                    log.info("Login blocked by member forceLogout: userUid={}, orgUid={}", userUid, orgUid);
+                    throw new MemberForceLogoutException(userUid, orgUid, reason);
+                });
+    }
+
+    private void enforceOrganizationMaxMembersIfNeeded(UserDetailsImpl userDetails) {
+        if (userDetails == null) {
+            return;
+        }
+
+        // Super user should always be allowed to log in.
+        if (Boolean.TRUE.equals(userDetails.getSuperUser())) {
+            return;
+        }
+
+        final String orgUid = userDetails.getOrgUid();
+        final String userUid = userDetails.getUid();
+
+        if (!StringUtils.hasText(orgUid) || !StringUtils.hasText(userUid)) {
+            return;
+        }
+
+        // Default organization does not enforce member limits.
+        if (BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(orgUid)) {
+            return;
+        }
+
+        OrganizationEntity org = organizationRepository.findByUid(orgUid).orElse(null);
+        if (org == null) {
+            return;
+        }
+
+        Integer maxMembers = org.getMaxMembers();
+        if (maxMembers == null || maxMembers <= 0) {
+            return;
+        }
+
+        // If this user is already active in the org (e.g., multiple devices), do not count as new.
+        final var now = BdDateUtils.now();
+
+        boolean alreadyActive = tokenRepository.existsActiveTokenByOrgUidAndUserUid(orgUid, userUid, now);
+        if (alreadyActive) {
+            return;
+        }
+
+        long currentDistinctUsers = tokenRepository.countDistinctActiveUserUidsByOrgUid(orgUid, now);
+        if (currentDistinctUsers >= maxMembers.longValue()) {
+            String msg = String.format("当前组织允许同时登录的最大成员数为 %d，已达到上限（当前已登录：%d）。", maxMembers, currentDistinctUsers);
+            throw new OrgMaxMembersExceededException(orgUid, maxMembers, currentDistinctUsers, msg);
+        }
+    }
+
+    /**
+     * 通用的密码验证逻辑
+     */
+    private Authentication authenticateWithPassword(UserDetailsImpl userDetails, String password, String username) {
+        try {
+            // 验证密码与数据库中存储的BCrypt密码
+            String dbPassword = userDetails.getPassword(); // 数据库存储的BCrypt加密密码
+            boolean isValid = passwordEncoder.matches(password, dbPassword);
+            
+            if (!isValid) {
+                log.warn("Password verification failed for user: {}", username);
+                return null;
+            }
+
+            // 密码验证成功，构造认证对象
+            log.info("Password authentication successful for user: {}", username);
+            return new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+            
+        } catch (Exception e) {
+            log.error("Password authentication error for user: {}: {}", username, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 明文密码登录 - 直接验证明文密码
+     * 参考 authenticateWithPasswordHash 逻辑，去掉AES解密过程
+     */
+    public Authentication authenticateWithPlainPassword(AuthRequest authRequest) {
+        UserDetailsImpl userDetails = loadUserForLogin(authRequest);
+        if (userDetails == null) {
+            return null;
+        }
+
+        // 2. 直接使用明文密码验证（无需AES解密）
+        String plainPassword = authRequest.getPassword();
+        log.debug("Using plain password authentication for user: {}", authRequest.getUsername());
+
+        return authenticateWithPassword(userDetails, plainPassword, authRequest.getUsername());
+    }
+
+    /**
+     * 密码哈希登录 - 支持AES解密
+     * 前端使用AES加密密码，后端解密后验证
+     */
+    public Authentication authenticateWithPasswordHash(AuthRequest authRequest) {
+        UserDetailsImpl userDetails = loadUserForLogin(authRequest);
+        if (userDetails == null) {
+            return null;
+        }
+        
+        try {
+            // 2. 使用AES解密前端发送的加密密码
+            // P5：解密内部已做载荷预检（Base64/块对齐），非法载荷抛 IllegalArgumentException
+            String decryptedPassword = PasswordCryptoUtils.decryptPassword(
+                authRequest.getPasswordHash(),
+                authRequest.getPasswordSalt()
+            );
+            // 不记录任何密码片段，仅记录长度
+            log.debug("Password decrypted successfully for user: {}, length: {}",
+                     authRequest.getUsername(), decryptedPassword.length());
+
+            return authenticateWithPassword(userDetails, decryptedPassword, authRequest.getUsername());
+            
+        } catch (Exception e) {
+            // Do not log credential material; keep enough context for troubleshooting
+            log.warn("Password hash authentication failed (decrypt/verify): username={}, platform={}, channel={}",
+                    authRequest.getUsername(), authRequest.getPlatform(), authRequest.getChannel(), e);
+            return null;
+        }
+    }
+
+    private UserDetailsImpl loadUserForLogin(AuthRequest authRequest) {
+        try {
+            return (UserDetailsImpl) userDetailsService.loadUserByUsernameAndPlatform(
+                    authRequest.getUsername(),
+                    authRequest.getPlatform());
+        } catch (UsernameNotFoundException ex) {
+            log.info("Authentication rejected: username={}, platform={}, reason=user_not_found",
+                    authRequest.getUsername(), authRequest.getPlatform());
+            return null;
+        }
+    }
+
+
+}

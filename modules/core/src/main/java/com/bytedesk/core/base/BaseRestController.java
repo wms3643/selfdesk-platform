@@ -1,0 +1,307 @@
+
+package com.bytedesk.core.base;
+
+import org.springframework.data.domain.Page;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+
+import com.bytedesk.core.utils.JsonResult;
+
+import jakarta.servlet.http.HttpServletResponse;
+
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * @author jackning 270580156@qq.com
+ */
+@Slf4j
+public abstract class BaseRestController<T extends PageableRequest, S> {
+
+    /**
+     * 获取对应的服务实例
+     * 提供默认实现，通过反射自动查找服务字段
+     * 子类也可以重写此方法来提供具体的服务对象
+     */
+    @SuppressWarnings("unchecked")
+    protected S getService() {
+        try {
+            // 通过反射查找以 Service 结尾的字段
+            java.lang.reflect.Field[] fields = this.getClass().getDeclaredFields();
+            for (java.lang.reflect.Field field : fields) {
+                if (field.getName().endsWith("Service") || field.getName().endsWith("RestService")) {
+                    field.setAccessible(true);
+                    Object service = field.get(this);
+                    if (service != null) {
+                        return (S) service;
+                    }
+                }
+            }
+            
+            // 如果没找到，查找所有字段中第一个非基本类型的字段（可能是服务）
+            for (java.lang.reflect.Field field : fields) {
+                if (!field.getType().isPrimitive() && 
+                    !field.getType().equals(String.class) && 
+                    !field.getName().equals("log") &&
+                    !java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                    field.setAccessible(true);
+                    Object service = field.get(this);
+                    if (service != null) {
+                        return (S) service;
+                    }
+                }
+            }
+            
+            throw new RuntimeException("No service field found. Please override getService() method or ensure you have a field ending with 'Service' or 'RestService'");
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get service instance: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 通用的queryByOrg实现
+     * 减少子类重复代码
+     * 注意：由于泛型擦除，需要使用PageableRequest.class来查找方法
+     */
+    @GetMapping("/query/org")
+    public ResponseEntity<?> queryByOrg(T request) {
+        try {
+            S service = getService();
+            Object result = invokeRequestMethod(service, "queryByOrg", request);
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 通用的queryByUser实现
+     * 减少子类重复代码
+     * 注意：由于泛型擦除，需要使用PageableRequest.class来查找方法
+     */
+    @GetMapping({"/query", "/query/user"})
+    public ResponseEntity<?> queryByUser(T request) {
+        try {
+            S service = getService();
+            Object result = invokeRequestMethod(service, "queryByUser", request);
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 通用的queryByUid实现
+     * 减少子类重复代码
+     * 注意：由于泛型擦除，需要使用PageableRequest.class来查找方法
+     */
+    @GetMapping("/query/uid")
+    public ResponseEntity<?> queryByUid(T request) {
+        try {
+            S service = getService();
+            Object result = invokeRequestMethod(service, "queryByUid", request);
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 通用的create实现
+     * 减少子类重复代码
+     * 注意：由于泛型擦除，需要使用PageableRequest.class来查找方法
+     */
+    @PostMapping("/create")
+    public ResponseEntity<?> create(@RequestBody T request) {
+        try {
+            S service = getService();
+            Object result = invokeRequestMethod(service, "create", request);
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 通用的update实现
+     * 减少子类重复代码
+     * 注意：由于泛型擦除，需要使用PageableRequest.class来查找方法
+     */
+    @PostMapping("/update")
+    public ResponseEntity<?> update(@RequestBody T request) {
+        try {
+            S service = getService();
+            Object result = invokeRequestMethod(service, "update", request);
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 通用的delete实现
+     * 减少子类重复代码
+     * 注意：由于泛型擦除，需要使用PageableRequest.class来查找方法
+     */
+    @PostMapping("/delete")
+    public ResponseEntity<?> delete(@RequestBody T request) {
+        try {
+            S service = getService();
+            invokeRequestMethod(service, "delete", request);
+            return ResponseEntity.ok(JsonResult.success());
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 通用的restore实现
+     * 减少子类重复代码
+     */
+    @PostMapping("/restore")
+    public ResponseEntity<?> restore(@RequestBody T request) {
+        try {
+            S service = getService();
+            Object result = invokeRequestMethod(service, "restore", request);
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * delete by org uid
+     *
+     * @param request role
+     * @return json
+     */
+    @PostMapping("/delete/org")
+    public ResponseEntity<?> deleteByOrgUid(@RequestBody T request) {
+        // 默认实现，子类可以覆盖
+        throw new UnsupportedOperationException("Method deleteByOrgUid needs to be implemented in child class");
+    }
+
+    /**
+     * 通用导出Excel模板方法
+     * 
+     * @param <E&gt; Excel实体类型
+     * @param <SVC&gt; Service类型
+     * @param request 请求参数
+     * @param response HTTP响应
+     * @param service 服务对象
+     * @param excelClass Excel类
+     * @param sheetName 工作表名称
+     * @param filePrefix 文件名前缀
+     * @return 导出结果
+     */
+    protected <E, SVC> Object exportTemplate(
+            T request, 
+            HttpServletResponse response,
+            SVC service,
+            Class<E> excelClass,
+            String sheetName, 
+            String filePrefix) {
+        try {
+            Object data = invokeMethod(service, "queryByOrgEntity", request);
+            List<E> excelList = convertToExcelList(service, data);
+            ExcelExportUtils.writeExcel(response, request, excelList, excelClass, sheetName, filePrefix);
+
+        } catch (Exception e) {
+            log.error("exportTemplate failed: filePrefix={}, sheetName={}, excelClass={}, request={}",
+                    filePrefix,
+                    sheetName,
+                    excelClass != null ? excelClass.getName() : null,
+                    request,
+                    e);
+            // 发生异常时重置响应
+            response.reset();
+            response.setContentType("application/json");
+            response.setCharacterEncoding("utf-8");
+            String message = e.getMessage() != null ? e.getMessage() : e.toString();
+            return JsonResult.error(message);
+        }
+        return "";
+    }
+
+    /**
+     * 通过反射调用服务方法
+     */
+    private <SVC> Object invokeMethod(SVC service, String methodName, Object... args) throws Exception {
+        Method method = null;
+        for (Method m : service.getClass().getMethods()) {
+            if (m.getName().equals(methodName)) {
+                method = m;
+                break;
+            }
+        }
+        if (method != null) {
+            return method.invoke(service, args);
+        }
+        throw new NoSuchMethodException("Method " + methodName + " not found");
+    }
+
+    /**
+     * 调用接收具体请求对象的服务方法
+     */
+    private <SVC> Object invokeRequestMethod(SVC service, String methodName, T request) throws Exception {
+        Method method = null;
+        for (Method candidate : service.getClass().getMethods()) {
+            if (!candidate.getName().equals(methodName) || candidate.getParameterCount() != 1) {
+                continue;
+            }
+            Class<?> parameterType = candidate.getParameterTypes()[0];
+            if (parameterType.isAssignableFrom(request.getClass())) {
+                method = candidate;
+                break;
+            }
+        }
+        if (method == null) {
+            throw new NoSuchMethodException("Method " + methodName + " not found for request type " + request.getClass().getSimpleName());
+        }
+        return method.invoke(service, request);
+    }
+
+    /**
+     * 转换数据为Excel列表
+     */
+    @SuppressWarnings("unchecked")
+    private <E, SVC> List<E> convertToExcelList(SVC service, Object data) throws Exception {
+        if (data instanceof Page) {
+            Page<?> page = (Page<?>) data;
+            Method convertMethod = null;
+            for (Method m : service.getClass().getMethods()) {
+                if (m.getName().equals("convertToExcel")) {
+                    convertMethod = m;
+                    break;
+                }
+            }
+            
+            if (convertMethod != null) {
+                List<Object> content = (List<Object>) page.getContent();
+                List<E> result = new ArrayList<>();
+                for (Object entity : content) {
+                    result.add((E) convertMethod.invoke(service, entity));
+                }
+                return result;
+            }
+        }
+        throw new IllegalArgumentException("Invalid data format or convert method not found");
+    }
+
+    /**
+     * export
+     *
+     * @param request role
+     * @return json
+     */
+    @GetMapping("/export")
+    public Object export(T request, HttpServletResponse response) {
+        throw new UnsupportedOperationException("Method export needs to be implemented in child class");
+    }
+
+}

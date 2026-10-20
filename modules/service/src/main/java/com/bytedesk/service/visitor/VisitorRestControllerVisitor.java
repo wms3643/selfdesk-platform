@@ -1,0 +1,639 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-24 12:00:05
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.visitor;
+
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.domain.Page;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import com.bytedesk.ai.robot.RobotService;
+import com.bytedesk.core.annotation.ApiRateLimiter;
+import com.bytedesk.core.annotation.BlackIpFilter;
+import com.bytedesk.core.annotation.BlackUserFilter;
+import com.bytedesk.core.annotation.TabooJsonFilter;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.ip.IpService;
+import com.bytedesk.core.ip.IpUtils;
+import com.bytedesk.core.message.IMessageSendService;
+import com.bytedesk.core.message.MessageProtobuf;
+import com.bytedesk.core.message.MessageRequest;
+import com.bytedesk.core.message.MessageResponse;
+import com.bytedesk.core.message.MessageRestService;
+import com.bytedesk.kbase.taboo.TabooService;
+import com.bytedesk.kbase.auto_reply.AutoReplyService;
+import com.bytedesk.core.message_unread.MessageUnreadRequest;
+import com.bytedesk.core.message_unread.MessageUnreadResponse;
+import com.bytedesk.core.message_unread.MessageUnreadRestService;
+import com.bytedesk.core.thread.ThreadResponse;
+import com.bytedesk.core.thread.ThreadRestService;
+import com.bytedesk.core.thread.ThreadRequest;
+import com.bytedesk.core.thread.ThreadSequenceResponse;
+import java.time.ZonedDateTime;
+import com.bytedesk.core.utils.JsonResult;
+import com.bytedesk.service.agent.AgentEntity;
+import com.bytedesk.service.agent.AgentPublicResponse;
+import com.bytedesk.service.agent.AgentRestService;
+
+import java.util.Optional;
+
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * anonymous api, no need to login
+ */
+@Slf4j
+@RestController
+@AllArgsConstructor
+@RequestMapping("/visitor/api/v1")
+@Tag(name = "访客匿名管理", description = "访客匿名相关接口")
+public class VisitorRestControllerVisitor {
+
+    private final VisitorRestService visitorRestService;
+
+    private final MessageUnreadRestService messageUnreadRestService;
+
+    private final IMessageSendService messageSendService;
+
+    private final MessageRestService messageRestService;
+
+    private final ThreadRestService threadRestService;
+
+    private final IpService ipService;
+
+    private final RobotService robotService;
+
+    private final AgentRestService agentRestService;
+
+    private final TabooService tabooService;
+
+    private final AutoReplyService autoReplyService;
+
+    @Qualifier("virtualAsyncExecutor")
+    private final ExecutorService executorService;
+
+    @ApiRateLimiter(value = 1, timeout = 1)
+    @BlackIpFilter(title = "black", action = "init")
+    @PostMapping("/init")
+    public ResponseEntity<?> init(@RequestBody VisitorRequest request, HttpServletRequest httpRequest) {
+        //
+        String ip = IpUtils.getIp(httpRequest);
+        if (ip != null) {
+            request.setIp(ip);
+            request.setIpLocation(ipService.getIpLocation(ip));
+        }
+        //
+        if (!StringUtils.hasText(request.getNickname())) {
+            request.setNickname(ipService.createVisitorNickname(httpRequest));
+        }
+        //
+        VisitorResponse visitor = visitorRestService.create(request);
+        //
+        return ResponseEntity.ok(JsonResult.success(visitor));
+    }
+
+    @BlackIpFilter(title = "black", action = "thread")
+    @PostMapping("/thread")
+    public ResponseEntity<?> requestThread(@RequestBody VisitorRequest request, HttpServletRequest httpRequest) {
+        //
+        String ip = IpUtils.getIp(httpRequest);
+        if (ip != null) {
+            request.setIp(ip);
+            request.setIpLocation(ipService.getIpLocation(ip));
+        }
+        //
+        MessageProtobuf messageProtobuf = visitorRestService.requestThread(request);
+        //
+        return ResponseEntity.ok(JsonResult.success(messageProtobuf));
+    }
+
+    /**
+     * 访客发送消息前，先从服务端申请消息元信息
+     */
+    @PostMapping("/thread/message/meta")
+    public ResponseEntity<?> requestMessageMetadata(@RequestBody ThreadRequest request) {
+        if (request == null || !StringUtils.hasText(request.getUid())) {
+            return ResponseEntity.ok(JsonResult.error("thread uid required"));
+        }
+        ThreadSequenceResponse response = threadRestService.allocateMessageMetadata(request.getUid());
+        return ResponseEntity.ok(JsonResult.success("获取消息元信息成功", response));
+    }
+
+    @GetMapping("/ping")
+    public ResponseEntity<?> ping(MessageUnreadRequest request) {
+
+        visitorRestService.updateStatus(request.getUid(), VisitorStatusEnum.ONLINE.name());
+
+        long count = messageUnreadRestService.getUnreadCount(request);
+
+        return ResponseEntity.ok(JsonResult.success("pong", count));
+    }
+
+    /**
+     * 根据主题查询消息
+     * 
+     * @param request 查询请求
+     * @return 分页消息列表
+     */
+    // @Operation(summary = "根据主题查询消息", description = "根据主题查询相关消息")
+    @GetMapping("/message/thread/topic")
+    public ResponseEntity<?> queryByThreadTopic(MessageRequest request) {
+        if (!StringUtils.hasText(request.getOrgUid())) {
+            return ResponseEntity.ok(JsonResult.error("orgUid required"));
+        }
+        if (!StringUtils.hasText(request.getVisitorUid()) && !StringUtils.hasText(request.getUid())) {
+            return ResponseEntity.ok(JsonResult.error("visitorUid or uid required"));
+        }
+        // 访客端匿名接口：服务端强制按访客视角过滤消息（NOTICE/TRANSFER*/INVITE*/
+        // NOTIFICATION_AGENT_REPLY_TIMEOUT/NOTIFICATION_RATE_SUBMITTED/QUEUE_NOTICE/QUEUE_ACCEPT 等），
+        // 与 chatbox 主聊天列表的过滤口径完全一致，前后端同步升级无需考虑旧版兼容
+        request.setComponentType(TypeConsts.COMPONENT_TYPE_VISITOR);
+        Page<MessageResponse> response = messageRestService.queryByOrg(request);
+        //
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 根据会话UID查询消息
+     * 
+     * @param request 查询请求
+     * @return 分页消息列表
+     */
+    @GetMapping("/message/thread/uid")
+    public ResponseEntity<?> queryByThreadUid(MessageRequest request) {
+        if (!StringUtils.hasText(request.getOrgUid())) {
+            return ResponseEntity.ok(JsonResult.error("orgUid required"));
+        }
+        // 访客端匿名接口：服务端强制按访客视角过滤消息，与 chatbox 主聊天列表口径一致
+        request.setComponentType(TypeConsts.COMPONENT_TYPE_VISITOR);
+        Page<MessageResponse> response = messageRestService.queryByOrg(request);
+        //
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    // 访客拉取未读消息
+    @GetMapping("/message/unread")
+    public ResponseEntity<?> getMessageUnread(MessageUnreadRequest request) {
+
+        Page<MessageUnreadResponse> messages = messageUnreadRestService.queryByUser(request);
+
+        return ResponseEntity.ok(JsonResult.success("get unread messages success", messages));
+    }
+
+    // 获取未读消息数
+    @GetMapping("/message/unread/count")
+    public ResponseEntity<?> getMessageUnreadCount(MessageUnreadRequest request) {
+
+        long count = messageUnreadRestService.getUnreadCount(request);
+
+        return ResponseEntity.ok(JsonResult.success("get unread messages count success", count));
+    }
+
+    /**
+     * 访客主动关闭当前会话(按topic或uid)，支持传closeType=VISITOR
+     * 迁移到 ThreadRestControllerVisitor.closeThread()，保留此接口仅用于兼容旧版本
+     */
+    // @PostMapping("/thread/close")
+    // public ResponseEntity<?> closeThread(@RequestBody ThreadRequest request) {
+    //     // 强制标记来源为VISITOR，除非显式传其他类型(允许未来扩展)
+    //     if (!StringUtils.hasText(request.getCloseType())) {
+    //         request.setCloseType(ThreadCloseTypeEnum.VISITOR.name());
+    //     }
+    //     // ThreadResponse response;
+    //     // if (StringUtils.hasText(request.getUid())) {
+    //     // response = threadRestService.closeByUid(request);
+    //     // // 从排队中退出（若存在）
+    //     // queueMemberRestService.visitorExitQueue(request.getUid());
+    //     // } else if (StringUtils.hasText(request.getTopic())) {
+    //     // response = threadRestService.closeByTopic(request);
+    //     // if (response != null && StringUtils.hasText(response.getUid())) {
+    //     // queueMemberRestService.visitorExitQueue(response.getUid());
+    //     // }
+    //     // } else {
+    //     // return ResponseEntity.ok(JsonResult.error("thread uid/topic required"));
+    //     // }
+    //     return ResponseEntity.ok(JsonResult.success("close success"));
+    // }
+
+    /**
+     * 关闭来源分布报表(按 updatedAt 时间范围统计)
+     */
+    @GetMapping("/thread/report/close-type")
+    public ResponseEntity<?> queryCloseType(@RequestParam(value = "start", required = false) Long startEpoch,
+            @RequestParam(value = "end", required = false) Long endEpoch) {
+        ZonedDateTime end = endEpoch != null
+                ? ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(endEpoch), java.time.ZoneId.systemDefault())
+                : ZonedDateTime.now();
+        ZonedDateTime start = startEpoch != null
+                ? ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(startEpoch), java.time.ZoneId.systemDefault())
+                : end.minusDays(1);
+        Map<String, Long> data = threadRestService.queryClosedByCloseType(start, end);
+        return ResponseEntity.ok(JsonResult.success("report success", data));
+    }
+
+    // 清空当前用户所有未读消息
+    @PostMapping("/message/unread/clear")
+    public ResponseEntity<?> clearMessageUnread(@RequestBody MessageUnreadRequest request) {
+        //
+        messageUnreadRestService.clearUnreadMessages(request);
+        // 看下是否清空了
+        long count = messageUnreadRestService.getUnreadCount(request);
+
+        return ResponseEntity.ok(JsonResult.success("clear unread messages count success", count));
+    }
+
+    /**
+     * 根据访客UID分页查询其会话列表
+     * 
+     * @param visitorUid 访客UID
+     * @param page       页码（从0开始）
+     * @param size       每页大小
+     * @return 分页会话列表
+     */
+    @GetMapping("/threads")
+    public ResponseEntity<?> queryVisitorThreads(ThreadRequest request) {
+        if (request.getMergeByTopic() == null) {
+            request.setMergeByTopic(true);
+        }
+
+        Page<ThreadResponse> threads = threadRestService.queryByVisitor(request);
+
+        return ResponseEntity.ok(JsonResult.success("查询成功", threads));
+    }
+
+    /**
+     * 匿名查询访客详情（用于访客端资料面板展示服务端真实数据）
+     */
+    @GetMapping("/visitor/query/uid")
+    public ResponseEntity<?> queryVisitorByUid(
+            @RequestParam(value = "uid") String uid,
+            @RequestParam(value = "orgUid", required = false) String orgUid) {
+        if (!StringUtils.hasText(uid)) {
+            return ResponseEntity.ok(JsonResult.error("uid required"));
+        }
+
+        Optional<VisitorEntity> visitorOptional = Optional.empty();
+        if (StringUtils.hasText(orgUid)) {
+            visitorOptional = visitorRestService.findByVisitorUidAndOrgUid(uid, orgUid);
+        }
+        if (!visitorOptional.isPresent()) {
+            visitorOptional = visitorRestService.findByUid(uid);
+        }
+        if (!visitorOptional.isPresent()) {
+            return ResponseEntity.ok(JsonResult.error("visitor not found"));
+        }
+
+        VisitorEntity visitor = visitorOptional.get();
+        if (StringUtils.hasText(orgUid) && !orgUid.equals(visitor.getOrgUid())) {
+            return ResponseEntity.ok(JsonResult.error("visitor not found"));
+        }
+
+        return ResponseEntity.ok(JsonResult.success(visitorRestService.convertToResponse(visitor)));
+    }
+
+    /**
+     * 匿名查询客服信息（用于访客端展示客服工号等公开信息）
+     *
+     * 说明：
+     * - 该接口不需要登录授权
+     * - uid 既支持传 agent.uid（客服实体 uid），也支持传 userUid（消息中 user.uid）
+     */
+    @GetMapping("/agent/query/uid")
+    public ResponseEntity<?> queryAgentByUid(
+            @RequestParam(value = "uid") String uid,
+            @RequestParam(value = "orgUid", required = false) String orgUid) {
+        if (!StringUtils.hasText(uid)) {
+            return ResponseEntity.ok(JsonResult.error("uid required"));
+        }
+
+        Optional<AgentEntity> agentOptional = agentRestService.findByUid(uid);
+        if (!agentOptional.isPresent()) {
+            if (StringUtils.hasText(orgUid)) {
+                agentOptional = agentRestService.findByUserUidAndOrgUid(uid, orgUid);
+            } else {
+                try {
+                    agentOptional = agentRestService.findByUserUid(uid);
+                } catch (IllegalStateException e) {
+                    return ResponseEntity.ok(JsonResult.error("multiple agents found, please provide orgUid"));
+                }
+            }
+        }
+        if (!agentOptional.isPresent()) {
+            return ResponseEntity.ok(JsonResult.error("agent not found"));
+        }
+
+        AgentEntity agent = agentOptional.get();
+        AgentPublicResponse response = AgentPublicResponse.from(agent);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    // 访客发送http消息
+    @BlackIpFilter(title = "black", action = "sendRestMessage")
+    @BlackUserFilter(title = "black", action = "sendRestMessage")
+    @VisitorAnnotation(title = "visitor", action = "sendRestMessage", description = "sendRestMessage")
+    @PostMapping("/message/send")
+    public ResponseEntity<?> sendRestMessage(@RequestBody Map<String, String> map) {
+        String json = (String) map.get("json");
+        if (!StringUtils.hasText(json)) {
+            return ResponseEntity.ok(JsonResult.error("messageJson required"));
+        }
+
+        MessageProtobuf messageProtobuf;
+        try {
+            messageProtobuf = MessageProtobuf.fromJson(json);
+        } catch (Exception e) {
+            log.warn("invalid visitor message payload: {}", e.getMessage());
+            return ResponseEntity.ok(JsonResult.error("invalid messageJson"));
+        }
+
+        if (messageProtobuf == null || messageProtobuf.getThread() == null) {
+            return ResponseEntity.ok(JsonResult.error("thread required"));
+        }
+
+        String threadUid = messageProtobuf.getThread().getUid();
+        String threadTopic = messageProtobuf.getThread().getTopic();
+        if (!StringUtils.hasText(threadTopic) && StringUtils.hasText(threadUid)) {
+            Optional<com.bytedesk.core.thread.ThreadEntity> threadOptional = threadRestService.findByUid(threadUid);
+            if (threadOptional.isPresent()) {
+                messageProtobuf.getThread().setTopic(threadOptional.get().getTopic());
+                if (!StringUtils.hasText(messageProtobuf.getThread().getUid())) {
+                    messageProtobuf.getThread().setUid(threadOptional.get().getUid());
+                }
+                json = messageProtobuf.toJson();
+            }
+        }
+
+        if (!StringUtils.hasText(messageProtobuf.getThread().getUid())
+                || !StringUtils.hasText(messageProtobuf.getThread().getTopic())) {
+            return ResponseEntity.ok(JsonResult.error("thread uid and topic required"));
+        }
+
+        log.debug("json {}", json);
+        messageSendService.sendJsonMessage(json);
+
+        return ResponseEntity.ok(JsonResult.success(json));
+    }
+
+    /**
+     * 访客发送机器人 SSE 消息前先做敏感词预检：
+     * - hit=true: 直接落库访客问题(敏感词替换后)和机器人回复，并返回消息实体给前端直接展示
+     * - hit=false: 前端继续走 sendSseMessage
+     */
+    @PostMapping("/message/taboo/check")
+    public ResponseEntity<?> checkTabooBeforeSse(@RequestBody VisitorTabooCheckRequest request) {
+        if (request == null || !StringUtils.hasText(request.messageJson())) {
+            return ResponseEntity.ok(JsonResult.error("messageJson required"));
+        }
+
+        try {
+            TabooService.VisitorTabooCheckResult result = tabooService.checkVisitorTabooBeforeSse(
+                    request.messageJson(),
+                    request.orgUid());
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    /**
+     * 访客发送机器人 SSE 消息前自动回复预检：
+     * - hit=true: 前端直接展示自动回复并跳过 SSE
+     * - hit=false: 前端继续走 sendSseMessage
+     */
+    @PostMapping("/message/autoreply/check")
+    public ResponseEntity<?> checkAutoReplyBeforeSse(@RequestBody VisitorAutoReplyCheckRequest request) {
+        if (request == null || !StringUtils.hasText(request.messageJson())) {
+            return ResponseEntity.ok(JsonResult.error("messageJson required"));
+        }
+
+        try {
+            AutoReplyService.VisitorAutoReplyCheckResult result = autoReplyService.checkVisitorAutoReplyBeforeSse(
+                    request.messageJson(),
+                    request.orgUid(),
+                    request.autoReplySettingsUid());
+            return ResponseEntity.ok(JsonResult.success(result));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.ok(JsonResult.error(e.getMessage()));
+        }
+    }
+
+    // @BlackIpFilter(title = "black", action = "sendSseMemberMessage")
+    // @BlackUserFilter(title = "black", action = "sendSseMemberMessage")
+    @TabooJsonFilter(title = "敏感词", action = "sendSseMemberMessage")
+    @VisitorAnnotation(title = "visitor", action = "sendSseMemberMessage", description = "sendSseMemberMessage")
+    @GetMapping(value = "/member/message/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter sendSseMemberMessageGet(@RequestParam(value = "message") String message) {
+
+        return sendSseMemberMessageInternal(message);
+    }
+
+    // POST 变体：长 prompt 超出 URI 上限时使用（对齐 /message/sse 的 GET/POST 双端点模式）
+    // @ @BlackIpFilter(title = "black", action = "sendSseMemberMessage")
+    // @BlackUserFilter(title = "black", action = "sendSseMemberMessage")
+    @TabooJsonFilter(title = "敏感词", action = "sendSseMemberMessage")
+    @VisitorAnnotation(title = "visitor", action = "sendSseMemberMessage", description = "sendSseMemberMessagePost")
+    @PostMapping(value = "/member/message/sse", consumes = MediaType.TEXT_PLAIN_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter sendSseMemberMessagePost(@RequestBody String message) {
+
+        return sendSseMemberMessageInternal(message);
+    }
+
+    private SseEmitter sendSseMemberMessageInternal(String message) {
+
+        // 延长超时时间至10分钟
+        SseEmitter emitter = new SseEmitter(600_000L);
+        // 添加心跳机制，每30秒发送一个保活消息
+        // KeepAliveHelper.addKeepAliveEvent(emitter, 30000);
+
+        executorService.execute(() -> {
+            try {
+                robotService.processSseMemberMessage(message, emitter);
+            } catch (Exception e) {
+                log.error("Error processing SSE request", e);
+                // 检查连接是否还可用
+                try {
+                    emitter.completeWithError(e);
+                } catch (Exception completeException) {
+                    log.debug("SSE emitter completion failed, connection may already be closed: {}",
+                            completeException.getMessage());
+                }
+            }
+        });
+
+        // 添加超时和完成时的回调
+        emitter.onTimeout(() -> {
+            log.warn("sendSseMemberMessage SSE connection timed out");
+            try {
+                emitter.complete();
+            } catch (Exception e) {
+                log.debug("SSE emitter timeout completion failed: {}", e.getMessage());
+            }
+        });
+
+        emitter.onCompletion(() -> {
+            log.info("sendSseMemberMessage SSE connection completed");
+            // KeepAliveHelper.removeKeepAliveEvent(emitter);
+        });
+
+        // 添加错误处理回调
+        emitter.onError((e) -> {
+            log.warn("sendSseMemberMessage SSE connection error: {}", e.getMessage());
+            try {
+                emitter.complete();
+            } catch (Exception completeException) {
+                log.debug("SSE emitter error completion failed: {}", completeException.getMessage());
+            }
+        });
+
+        return emitter;
+    }
+
+    @BlackIpFilter(title = "black", action = "sendSseVisitorMessage")
+    @BlackUserFilter(title = "black", action = "sendSseVisitorMessage")
+    @TabooJsonFilter(title = "敏感词", action = "sendSseVisitorMessage")
+    @VisitorAnnotation(title = "visitor", action = "sendSseVisitorMessage", description = "sendSseVisitorMessage")
+    @GetMapping(value = "/message/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter sendSseVisitorMessageGet(@RequestParam(value = "message") String message) {
+
+        return sendSseVisitorMessageInternal(message);
+    }
+
+    @BlackIpFilter(title = "black", action = "sendSseVisitorMessage")
+    @BlackUserFilter(title = "black", action = "sendSseVisitorMessage")
+    @TabooJsonFilter(title = "敏感词", action = "sendSseVisitorMessage")
+    @VisitorAnnotation(title = "visitor", action = "sendSseVisitorMessage", description = "sendSseVisitorMessage")
+    @PostMapping(value = "/message/sse", consumes = MediaType.TEXT_PLAIN_VALUE, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter sendSseVisitorMessagePost(@RequestBody String message) {
+
+        return sendSseVisitorMessageInternal(message);
+    }
+
+    private SseEmitter sendSseVisitorMessageInternal(String message) {
+        if (!StringUtils.hasText(message)) {
+            return createInvalidSseEmitter("message required");
+        }
+
+        // IMPORTANT: publishVisitorMessageEvent must complete BEFORE the async SSE processing below.
+        // @EventListener is synchronous by default, so RobotToAgentKeywordListener runs inline here
+        // and may mutate thread state (e.g. ROBOTING→QUEUING). The async executor then sees the
+        // updated state when it calls robotService.processSseVisitorMessage().
+        visitorRestService.publishVisitorMessageEvent(message);
+
+        // 延长超时时间至10分钟
+        SseEmitter emitter = new SseEmitter(600_000L);
+        // 添加心跳机制，每30秒发送一个保活消息
+        // KeepAliveHelper.addKeepAliveEvent(emitter, 30000);
+
+        executorService.execute(() -> {
+            try {
+                robotService.processSseVisitorMessage(message, emitter);
+            } catch (Exception e) {
+                log.error("sendSseVisitorMessage Error processing SSE request", e);
+                // 检查连接是否还可用
+                try {
+                    emitter.completeWithError(e);
+                } catch (Exception completeException) {
+                    log.debug("SSE emitter completion failed, connection may already be closed: {}",
+                            completeException.getMessage());
+                }
+            }
+        });
+
+        // 添加超时和完成时的回调
+        emitter.onTimeout(() -> {
+            log.warn("sendSseVisitorMessage SSE connection timed out");
+            try {
+                emitter.complete();
+            } catch (Exception e) {
+                log.debug("SSE emitter timeout completion failed: {}", e.getMessage());
+            }
+        });
+
+        emitter.onCompletion(() -> {
+            log.info("sendSseVisitorMessage SSE connection completed");
+            // KeepAliveHelper.removeKeepAliveEvent(emitter);
+        });
+
+        // 添加错误处理回调
+        emitter.onError((e) -> {
+            log.warn("sendSseVisitorMessage SSE connection error: {}", e.getMessage());
+            try {
+                emitter.complete();
+            } catch (Exception completeException) {
+                log.debug("SSE emitter error completion failed: {}", completeException.getMessage());
+            }
+        });
+
+        return emitter;
+    }
+
+    private SseEmitter createInvalidSseEmitter(String message) {
+        SseEmitter emitter = new SseEmitter(1L);
+        try {
+            emitter.completeWithError(new IllegalArgumentException(message));
+        } catch (Exception exception) {
+            log.debug("Failed to complete invalid SSE emitter: {}", exception.getMessage());
+        }
+        return emitter;
+    }
+
+    // message/sync
+    @BlackIpFilter(title = "black", action = "sync")
+    @BlackUserFilter(title = "black", action = "sync")
+    @TabooJsonFilter(title = "敏感词", action = "sync")
+    @ApiRateLimiter(value = 10.0, timeout = 1)
+    @VisitorAnnotation(title = "visitor", action = "sync", description = "sync visitor message")
+    @PostMapping("/message/sync")
+    public ResponseEntity<?> sendSyncVisitorMessage(@RequestBody Map<String, String> map) {
+        //
+        String json = (String) map.get("json");
+        log.debug("sync json {}", json);
+
+        try {
+            MessageProtobuf response = robotService.processSyncVisitorMessage(json);
+            return ResponseEntity.ok(JsonResult.success("sync success", response));
+        } catch (Exception e) {
+            log.error("Error processing sync visitor message", e);
+            return ResponseEntity.ok(JsonResult.error("处理消息失败：" + e.getMessage()));
+        }
+    }
+
+    // 在 Bean 销毁时关闭线程池
+    public void destroy() {
+        if (executorService != null && !executorService.isShutdown()) {
+            executorService.shutdown();
+        }
+    }
+
+    public record VisitorTabooCheckRequest(String messageJson, String orgUid) {
+    }
+
+    public record VisitorAutoReplyCheckRequest(String messageJson, String orgUid, String autoReplySettingsUid) {
+    }
+
+}

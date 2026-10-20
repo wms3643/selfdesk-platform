@@ -1,0 +1,288 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-29 13:00:33
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-01 13:47:17
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.visitor_thread;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.thread.event.ThreadCloseEvent;
+import com.bytedesk.core.topic.TopicUtils;
+import com.bytedesk.service.agent.AgentEntity;
+import com.bytedesk.service.agent.AgentRestService;
+import com.bytedesk.service.queue_member.QueueMemberEntity;
+import com.bytedesk.service.queue_member.QueueMemberRestService;
+import com.bytedesk.service.workgroup.WorkgroupEntity;
+import com.bytedesk.service.workgroup.WorkgroupRestService;
+import com.bytedesk.ai.robot.RobotEntity;
+import com.bytedesk.ai.robot.RobotRestService;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.message.IMessageSendService;
+import com.bytedesk.core.message.MessageProtobuf;
+import com.bytedesk.core.message.utils.MessageUtils;
+import com.bytedesk.core.quartz.event.QuartzOneMinEvent;
+import com.bytedesk.core.thread.ActiveThreadCache;
+import com.bytedesk.core.thread.ActiveThreadCacheService;
+import com.bytedesk.core.thread.ThreadEntity;
+import com.bytedesk.core.thread.ThreadRestService;
+import com.bytedesk.core.thread.enums.ThreadCloseTypeEnum;
+import com.bytedesk.core.thread.enums.ThreadTypeEnum;
+import com.bytedesk.core.utils.BdDateUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Component
+@AllArgsConstructor
+public class VisitorThreadEventListener {
+
+    private final VisitorThreadTimeoutService visitorThreadTimeoutService;
+
+    private final WorkgroupRestService workgroupRestService;
+
+    private final AgentRestService agentRestService;
+
+    private final RobotRestService robotRestService;
+
+    private final IMessageSendService messageSendService;
+
+    private final ThreadRestService threadRestService;
+
+    private final QueueMemberRestService queueMemberRestService;
+
+    private final ActiveThreadCacheService activeThreadCacheService;
+
+    private final VisitorThreadTriggerService visitorThreadTriggerService;
+
+    @EventListener
+    public void onThreadCloseEvent(ThreadCloseEvent event) {
+        ThreadEntity thread = event.getThread();
+        log.info("visitor onThreadCloseEvent: {}", thread.getUid());
+
+        // 使用closeType替代autoClose
+        String closeType = thread.getCloseType();
+        boolean autoClose = ThreadCloseTypeEnum.AUTO.name().equalsIgnoreCase(closeType);
+        boolean visitorClose = ThreadCloseTypeEnum.VISITOR.name().equalsIgnoreCase(closeType);
+
+        // 更新队列成员状态
+        updateQueueMemberOnClose(thread, autoClose);
+
+        // 如果是自动关闭且客服离线，不发送消息
+        if (autoClose && isAgentOffline(thread)) {
+            return;
+        }
+
+        // 获取关闭提示语
+        String content = getCloseTip(thread, closeType);
+        if (!StringUtils.hasText(content)) {
+            // 兜底：提示语为空时按关闭来源回退到通用提示语，避免消息内容为空导致前端展示原始 JSON
+            content = resolveGenericCloseTip(closeType);
+        }
+        String resolvedPromptExtra = buildResolvedPromptExtra(thread);
+
+        // 发送消息
+        MessageProtobuf messageProtobuf;
+        if (autoClose) {
+            messageProtobuf = MessageUtils.createAutoCloseMessage(thread, content, resolvedPromptExtra);
+        } else if (visitorClose) {
+            messageProtobuf = MessageUtils.createVisitorCloseMessage(thread, content, resolvedPromptExtra);
+        } else {
+            messageProtobuf = MessageUtils.createAgentCloseMessage(thread, content, resolvedPromptExtra);
+        }
+        messageSendService.sendProtobufMessage(messageProtobuf);
+    }
+
+    /**
+     * 优化：从 Redis 缓存查询活跃会话，避免频繁查询数据库
+     * 缓存在会话创建时写入，会话关闭时移除
+     * 
+     * OOM 修复：不再一次性将所有 ThreadEntity 加载到 List 中，改为逐个流式处理，
+     * 处理完一个立即释放引用，避免大量 TEXT 列实体同时驻留内存导致 OOM。
+     */
+    @EventListener
+    public void onQuartzOneMinEvent(QuartzOneMinEvent event) {
+        // 从缓存获取活跃会话列表
+        List<ActiveThreadCache> cachedThreads = activeThreadCacheService.getAllActiveServiceThreads();
+        
+        if (cachedThreads.isEmpty()) {
+            // 缓存为空时，从数据库加载并重建缓存（仅在系统启动或缓存失效时发生）
+            List<ThreadEntity> dbThreads = threadRestService.findServiceThreadStateStarted();
+            if (!dbThreads.isEmpty()) {
+                log.info("Rebuilding active thread cache from database, count: {}", dbThreads.size());
+                activeThreadCacheService.rebuildCacheFromDatabase(dbThreads);
+                // 使用数据库数据逐个处理，避免 OOM
+                dbThreads.forEach(visitorThreadTimeoutService::processSingleThreadTimeout);
+                dbThreads.forEach(visitorThreadTriggerService::processProactiveTrigger);
+            }
+            return;
+        }
+
+        List<ActiveThreadCache> validCachedThreads = cachedThreads.stream()
+            .filter(cache -> StringUtils.hasText(cache.getUid()))
+            .toList();
+
+        log.debug("Processing {} active service threads for timeout check", validCachedThreads.size());
+
+        // OOM 修复：逐个加载 ThreadEntity 并处理，处理完立即释放引用，
+        // 而不是用 .toList() 将所有实体一次性全部加载到内存中
+        for (ActiveThreadCache cache : validCachedThreads) {
+            try {
+                threadRestService.findByUid(cache.getUid())
+                    .filter(thread -> !thread.isClosed())
+                    .ifPresent(visitorThreadTimeoutService::processSingleThreadTimeout);
+            } catch (Exception e) {
+                // 单个线程处理失败不影响其他线程的处理
+                log.warn("Failed to process thread timeout for uid: {}", cache.getUid(), e);
+            }
+        }
+
+        // 处理主动触发逻辑（使用缓存数据进行时间判断，减少数据库查询）
+        validCachedThreads.forEach(visitorThreadTriggerService::processProactiveTriggerFromCache);
+    }
+
+    /**
+     * 更新队列成员状态
+     */
+    private void updateQueueMemberOnClose(ThreadEntity thread, boolean autoClose) {
+        Optional<QueueMemberEntity> queueMemberOptional = queueMemberRestService.findByThreadUid(thread.getUid());
+        if (queueMemberOptional.isPresent()) {
+            QueueMemberEntity queueMember = queueMemberOptional.get();
+            if (autoClose) {
+                queueMember.setSystemClosedAt(BdDateUtils.now());
+                queueMember.setSystemClose(true);
+            } else {
+                queueMember.setAgentClosedAt(BdDateUtils.now());
+                queueMember.setAgentClose(true);
+            }
+            queueMemberRestService.saveAsyncBestEffort(queueMember);
+        }
+    }
+
+    /**
+     * 检查客服是否离线
+     */
+    private boolean isAgentOffline(ThreadEntity thread) {
+        Optional<QueueMemberEntity> queueMemberOptional = queueMemberRestService.findByThreadUid(thread.getUid());
+        return queueMemberOptional.isPresent() && queueMemberOptional.get().getAgentOffline();
+    }
+
+    /**
+     * 获取关闭提示语
+     */
+    private String getCloseTip(ThreadEntity thread, String closeType) {
+        String topic = thread.getTopic();
+        boolean autoClose = ThreadCloseTypeEnum.AUTO.name().equalsIgnoreCase(closeType);
+        if (ThreadTypeEnum.WORKGROUP.name().equals(thread.getType())) {
+            return getWorkgroupCloseTip(topic, autoClose, closeType);
+        } else if (ThreadTypeEnum.AGENT.name().equals(thread.getType())) {
+            return getAgentCloseTip(topic, autoClose, closeType);
+        } else if (ThreadTypeEnum.ROBOT.name().equals(thread.getType())) {
+            return getRobotCloseTip(topic, closeType);
+        }
+        return resolveGenericCloseTip(closeType);
+    }
+
+    /**
+     * 获取工作组关闭提示语
+     */
+    private String getWorkgroupCloseTip(String topic, boolean autoClose, String closeType) {
+        String workgroupUid = TopicUtils.getWorkgroupUidFromThreadTopic(topic);
+        Optional<WorkgroupEntity> workgroupOptional = workgroupRestService.findByUid(workgroupUid);
+
+        if (workgroupOptional.isPresent()) {
+            WorkgroupEntity workgroup = workgroupOptional.get();
+            if (workgroup.getSettings() != null && workgroup.getSettings().getServiceSettings() != null) {
+                if (ThreadCloseTypeEnum.VISITOR.name().equalsIgnoreCase(closeType)) {
+                    String visitorCloseTip = workgroup.getSettings().getServiceSettings().getVisitorCloseTip();
+                    return StringUtils.hasText(visitorCloseTip) ? visitorCloseTip : resolveGenericCloseTip(closeType);
+                }
+                return autoClose ? workgroup.getSettings().getServiceSettings().getAutoCloseTip()
+                        : workgroup.getSettings().getServiceSettings().getAgentCloseTip();
+            }
+        }
+        return resolveGenericCloseTip(closeType);
+    }
+
+    /**
+     * 获取客服关闭提示语
+     */
+    private String getAgentCloseTip(String topic, boolean autoClose, String closeType) {
+        String agentUid = TopicUtils.getAgentUidFromThreadTopic(topic);
+        Optional<AgentEntity> agentOptional = agentRestService.findByUid(agentUid);
+
+        if (agentOptional.isPresent()) {
+            AgentEntity agent = agentOptional.get();
+            if (agent.getSettings() != null && agent.getSettings().getServiceSettings() != null) {
+                if (ThreadCloseTypeEnum.VISITOR.name().equalsIgnoreCase(closeType)) {
+                    String visitorCloseTip = agent.getSettings().getServiceSettings().getVisitorCloseTip();
+                    return StringUtils.hasText(visitorCloseTip) ? visitorCloseTip : resolveGenericCloseTip(closeType);
+                }
+                return autoClose ? agent.getSettings().getServiceSettings().getAutoCloseTip()
+                        : agent.getSettings().getServiceSettings().getAgentCloseTip();
+            }
+        }
+        return resolveGenericCloseTip(closeType);
+    }
+
+    /**
+     * 获取机器人关闭提示语
+     */
+    private String getRobotCloseTip(String topic, String closeType) {
+        String robotUid = TopicUtils.getRobotUidFromThreadTopic(topic);
+        Optional<RobotEntity> robotOptional = robotRestService.findByUid(robotUid);
+
+        if (robotOptional.isPresent()) {
+            RobotEntity robot = robotOptional.get();
+            if (robot.getSettings() != null && robot.getSettings().getServiceSettings() != null) {
+                if (ThreadCloseTypeEnum.VISITOR.name().equalsIgnoreCase(closeType)) {
+                    String visitorCloseTip = robot.getSettings().getServiceSettings().getVisitorCloseTip();
+                    return StringUtils.hasText(visitorCloseTip) ? visitorCloseTip : resolveGenericCloseTip(closeType);
+                }
+                return robot.getSettings().getServiceSettings().getAutoCloseTip();
+            }
+        }
+
+        return resolveGenericCloseTip(closeType);
+    }
+
+    private String resolveGenericCloseTip(String closeType) {
+        if (ThreadCloseTypeEnum.AUTO.name().equalsIgnoreCase(closeType)) {
+            return I18Consts.I18N_AUTO_CLOSE_TIP;
+        } else if (ThreadCloseTypeEnum.AGENT.name().equalsIgnoreCase(closeType)) {
+            return I18Consts.I18N_AGENT_CLOSE_TIP;
+        } else if (ThreadCloseTypeEnum.VISITOR.name().equalsIgnoreCase(closeType)) {
+            return I18Consts.I18N_VISITOR_CLOSE_TIP; // 访客关闭提示
+        } else if (ThreadCloseTypeEnum.SYSTEM.name().equalsIgnoreCase(closeType)) {
+            return I18Consts.I18N_AGENT_CLOSE_TIP;
+        }
+        return "会话已结束";
+    }
+
+    private String buildResolvedPromptExtra(ThreadEntity thread) {
+        if (thread == null || !StringUtils.hasText(thread.getUid()) || !StringUtils.hasText(thread.getOrgUid())) {
+            return null;
+        }
+        Optional<QueueMemberEntity> queueMemberOptional = queueMemberRestService.findByThreadUid(thread.getUid());
+        Boolean resolved = queueMemberOptional.map(qm -> qm.getResolved()).orElse(null);
+        boolean submitted = Boolean.TRUE.equals(resolved);
+        return MessageUtils.buildResolvedPromptExtra(thread.getUid(), thread.getOrgUid(), submitted, resolved);
+    }
+
+
+
+}

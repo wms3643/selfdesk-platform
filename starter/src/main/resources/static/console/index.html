@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SelfDesk 客服工作台</title>
+  <link rel="stylesheet" href="/console/styles.css">
+</head>
+<body>
+  <section id="loginView" class="login-view">
+    <div class="login-card">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" aria-hidden="true">
+          <path d="M4.6 7.2A3.6 3.6 0 0 1 8.2 3.6h7.6a3.6 3.6 0 0 1 3.6 3.6v4.6a3.6 3.6 0 0 1-3.6 3.6h-3.9l-4.1 3.3v-3.4A3.6 3.6 0 0 1 4.6 11.8V7.2Z" fill="#fff"/>
+          <circle cx="9.1" cy="9.4" r="1.05" fill="#0E7A68"/>
+          <circle cx="12" cy="9.4" r="1.05" fill="#0E7A68"/>
+          <circle cx="14.9" cy="9.4" r="1.05" fill="#0E7A68"/>
+        </svg>
+      </div>
+      <p class="eyebrow">SELFDESK</p>
+      <h1>客服工作台</h1>
+      <p class="muted login-copy">登录后处理实时会话、查看访客消息并回复客户。</p>
+      <form id="loginForm" class="login-form">
+        <label>账号<input id="loginUsername" name="username" autocomplete="username" placeholder="邮箱或用户名" required></label>
+        <label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="登录密码" required></label>
+        <label>访问令牌（可选）<input id="loginToken" name="token" type="password" autocomplete="off" placeholder="已有登录态时可直接粘贴令牌"></label>
+        <button id="loginButton" type="submit">登录工作台</button>
+      </form>
+      <p id="loginError" class="form-error" role="alert"></p>
+      <p class="login-help">已经在原客服端登录过？本页面会自动复用同一浏览器中的有效访问令牌。</p>
+    </div>
+  </section>
+
+  <section id="appView" class="app-view" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark small">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
+            <path d="M4.6 7.2A3.6 3.6 0 0 1 8.2 3.6h7.6a3.6 3.6 0 0 1 3.6 3.6v4.6a3.6 3.6 0 0 1-3.6 3.6h-3.9l-4.1 3.3v-3.4A3.6 3.6 0 0 1 4.6 11.8V7.2Z" fill="#fff"/>
+            <circle cx="9.1" cy="9.4" r="1.05" fill="#0E7A68"/>
+            <circle cx="12" cy="9.4" r="1.05" fill="#0E7A68"/>
+            <circle cx="14.9" cy="9.4" r="1.05" fill="#0E7A68"/>
+          </svg>
+        </span>
+        <div><strong>SelfDesk</strong><span>客服工作台</span></div>
+      </div>
+      <div class="topbar-actions">
+        <span id="connectionState" class="connection"><i></i>连接中</span>
+        <a href="/dashboard.html" target="_blank" rel="noopener">运营看板</a>
+        <button id="refreshButton" class="ghost-button" type="button">刷新</button>
+        <button id="logoutButton" class="ghost-button" type="button">退出</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="thread-panel">
+        <div class="profile-row">
+          <div id="agentAvatar" class="avatar agent-avatar">客</div>
+          <div class="profile-copy">
+            <strong id="agentName">正在加载</strong>
+            <span id="agentMeta">客服工作台</span>
+          </div>
+          <span id="agentOnline" class="status-dot" title="客服状态"></span>
+        </div>
+
+        <div class="thread-tools">
+          <input id="threadSearch" type="search" placeholder="搜索访客或会话">
+          <div class="filters">
+            <button class="filter" type="button" data-filter="active">进行中</button>
+            <button class="filter active" type="button" data-filter="all">全部</button>
+          </div>
+        </div>
+
+        <div id="threadList" class="thread-list" aria-live="polite">
+          <div class="empty-state">正在加载会话…</div>
+        </div>
+      </aside>
+
+      <main class="chat-panel">
+        <div id="chatEmpty" class="chat-empty">
+          <div class="empty-illustration">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="#A5AFAA" stroke-width="1.3"
+                 stroke-linejoin="round" aria-hidden="true">
+              <path d="M4.5 7.5A3 3 0 0 1 7.5 4.5h9a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-4.2L8 19.4v-2.9H7.5a3 3 0 0 1-3-3v-6Z"/>
+            </svg>
+          </div>
+          <h2>选择一条会话</h2>
+          <p>左侧出现新会话后，点击即可查看访客消息并回复。</p>
+        </div>
+
+        <section id="chatView" class="chat-view" hidden>
+          <header class="chat-header">
+            <div>
+              <h2 id="chatTitle">访客会话</h2>
+              <p id="chatSubtitle" class="muted"></p>
+            </div>
+            <button id="callButton" class="ghost-button" type="button" title="会话详情">详情</button>
+          </header>
+
+          <div id="messageList" class="message-list" aria-live="polite"></div>
+
+          <footer class="composer">
+            <textarea id="messageInput" rows="2" placeholder="输入回复，Enter 发送，Shift+Enter 换行"></textarea>
+            <div class="composer-actions">
+              <span id="sendHint" class="muted">消息会发送给当前访客</span>
+              <button id="sendButton" type="button">发送</button>
+            </div>
+          </footer>
+        </section>
+      </main>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/console/app.js"></script>
+  <script src="/selfdesk-brand.js" defer></script>
+</body>
+</html>

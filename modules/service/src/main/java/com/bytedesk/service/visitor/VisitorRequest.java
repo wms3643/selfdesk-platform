@@ -1,0 +1,306 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-04-04 17:05:48
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-19 17:17:17
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.visitor;
+
+import java.util.List;
+import java.util.ArrayList;
+
+import com.bytedesk.core.model.CustomFieldItem;
+import com.bytedesk.core.base.BaseRequest;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.enums.ChannelEnum;
+import com.bytedesk.core.enums.LanguageEnum;
+import com.bytedesk.core.enums.VisitorCallTypeEnum;
+import com.bytedesk.core.thread.enums.ThreadTypeEnum;
+
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import lombok.experimental.SuperBuilder;
+import lombok.experimental.Accessors;
+import org.springframework.data.domain.Pageable;
+import org.springframework.util.StringUtils;
+
+
+@Slf4j
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = true)
+@ToString(callSuper = true)
+@NoArgsConstructor
+@AllArgsConstructor
+public class VisitorRequest extends BaseRequest {
+
+	private static final long serialVersionUID = 1L;
+
+	// 前端自定义uid，用于区别于自动生成uid
+	private String visitorUid;
+
+	/**
+	 * developers can set basic visitor info
+	 */
+	private String nickname;
+
+	private String avatar;
+
+	@Builder.Default
+	private String lang = LanguageEnum.ZH_CN.name();
+	
+	// device info
+	private String browser;
+
+	private String os;
+
+	private String device;
+	
+	// used for agent notation
+	private String mobile;
+
+	private String email;
+
+	private String note;
+
+	// for thread request
+	private String sid;
+
+	// for visitor thread list filter
+	private String topic;
+
+	// 会话接入意图（TEXT/WEBRTC/PHONE），不替代 BaseRequest.type 的路由语义
+	@Builder.Default
+	private String callType = VisitorCallTypeEnum.TEXT.name();
+
+	// WEBRTC 默认是否启用麦克风/摄像头
+	@Builder.Default
+	private Boolean audio = true;
+
+	@Builder.Default
+	private Boolean video = true;
+
+	// 访客呼叫目标分机/AOR，由呼叫页面显式传入
+	private String target;
+
+	// 强制转人工服务，默认false
+	@Builder.Default
+	private Boolean forceAgent = false;
+
+	@Builder.Default
+	private String status = VisitorStatusEnum.ONLINE.name();
+
+	// 标签
+    @Builder.Default
+    private List<String> tagList = new ArrayList<>();
+
+	// 用户自定义字段：字段昵称/字段key/字段值
+	@Builder.Default
+	private List<CustomFieldItem> customFieldList = new ArrayList<>();
+
+	// 商品信息
+	private String goodsInfo;
+
+	// 订单信息
+	private String orderInfo;
+
+	// 自定义参数，从URL传入，使用json格式传入，例如：{"key1":"value1","key2":"value2"}
+	@Builder.Default
+	private String extra = BytedeskConsts.EMPTY_JSON_STRING;
+
+	// 浏览信息
+	// 来源
+	private String referrer;
+	// 浏览的URL
+	private String url;
+	// 浏览的标题
+	private String title;
+	// 浏览的IP
+	private String ip;
+	// 浏览的IP位置
+	private String ipLocation;
+
+	// 会员等级
+	@Builder.Default
+	private Integer vipLevel = 0;
+
+	// 本地/测试环境可直接绑定已有 FreeSWITCH 静态分机账号
+	private String sipExtension;
+	private String sipPassword;
+
+	// 用于区分本地测试还是线上环境
+	@Builder.Default
+	private Boolean debug = false;
+
+	// 灰度/草稿配置预览：为 true 时优先使用 draft 版本 settings
+	@Builder.Default
+	private Boolean draft = false;
+	private String settingsUid;
+
+	// 强制创建新会话，每次都创建新会话，主要用于测试
+	@Builder.Default
+	private Boolean forceNewThread = false;
+
+    /**
+     * 发起平台客服会话时携带的来源会话 uid（用户-商户纠纷溯源），可选。
+     * 格式：长度<=64，仅允许 [a-zA-Z0-9_-]，非法值将被忽略。
+     */
+    private String originThreadUid;
+
+    /**
+     * 来源会话所属组织 uid（访客从租户会话发起平台客服时，父页面传入的当前组织），可选。
+     * 格式：长度<=64，仅允许 [a-zA-Z0-9_-]，非法值将被忽略。
+     */
+    private String originOrgUid;
+
+    /**
+     * originThreadUid/originOrgUid 格式校验：非空时长度<=64且仅 [a-zA-Z0-9_-]
+     */
+    private boolean isValidOriginUid(String uid) {
+        return uid != null && uid.length() <= 64 && uid.matches("[a-zA-Z0-9_-]+");
+    }
+
+    public String getSanitizedOriginThreadUid() {
+        return isValidOriginUid(originThreadUid) ? originThreadUid : null;
+    }
+
+    public String getSanitizedOriginOrgUid() {
+        return isValidOriginUid(originOrgUid) ? originOrgUid : null;
+    }
+
+	/**
+	 * 判断是否为社交渠道（微信、Meta、Telegram、WhatsApp）
+	 * @return true 如果为社交渠道，否则为 false
+	 */
+	public Boolean isSocial() {
+		return isWeChat() || isMeta() || isTelegram() || isWhatsApp();
+	}
+	
+	public Boolean isWeChat() {
+		// 忽略大小写，常量放在前面避免空指针异常
+		return this.channel != null
+				&& this.channel.toLowerCase().contains(ChannelEnum.WECHAT.name().toLowerCase());
+	}
+
+	public Boolean isMeta() {
+		// 忽略大小写，常量放在前面避免空指针异常
+		return this.channel != null && ChannelEnum.MESSENGER.name().toLowerCase().contains(this.channel.toLowerCase());
+	}
+	
+	/**
+	 * 判断是否为企业微信客户端
+	 * @return true 如果为企业微信客户端，否则为 false
+	 */
+	public Boolean isWeChatWork() {
+		// 忽略大小写，常量放在前面避免空指针异常
+		return this.channel != null && ChannelEnum.WECHAT_WORK.name().toLowerCase().contains(this.channel.toLowerCase());
+	}
+
+	/**
+	 * 判断是否为Telegram客户端
+	 * @return true 如果为Telegram客户端，否则为 false
+	 */
+	public Boolean isTelegram() {
+		// 忽略大小写，常量放在前面避免空指针异常
+		return this.channel != null && ChannelEnum.TELEGRAM.name().toLowerCase().contains(this.channel.toLowerCase());
+	}
+
+	/**
+	 * 判断是否为WhatsApp客户端
+	 * @return true 如果为WhatsApp客户端，否则为 false
+	 */
+	public Boolean isWhatsApp() {
+		// 忽略大小写，常量放在前面避免空指针异常
+		return this.channel != null && ChannelEnum.WHATSAPP.name().toLowerCase().contains(this.channel.toLowerCase());
+	}
+
+	public void setWorkgroupType() {
+		this.type = String.valueOf(ThreadTypeEnum.WORKGROUP.getValue());
+	}
+
+	public void setAgentType() {
+		this.type = String.valueOf(ThreadTypeEnum.AGENT.getValue());
+	}
+
+	public void setRobotType() {
+		this.type = String.valueOf(ThreadTypeEnum.ROBOT.getValue());
+	}
+
+	public ThreadTypeEnum formatType() {
+		if (!StringUtils.hasText(super.type)) {
+			return ThreadTypeEnum.AGENT;
+		}
+
+		String normalized = super.type.trim();
+		try {
+			return ThreadTypeEnum.fromValue(Integer.parseInt(normalized));
+		} catch (NumberFormatException ignored) {
+			// Fallback to enum literal names, e.g. WORKGROUP/AGENT/ROBOT from frontend.
+		}
+
+		try {
+			return ThreadTypeEnum.valueOf(normalized.toUpperCase());
+		} catch (IllegalArgumentException e) {
+			log.error("VisitorRequest formatType parse failed: {}", super.type, e);
+			return ThreadTypeEnum.AGENT;
+		}
+	}
+
+	public VisitorCallTypeEnum formatCallType() {
+		return VisitorCallTypeEnum.fromValue(this.callType);
+	}
+
+	public boolean isRealtimeCallType() {
+		VisitorCallTypeEnum callType = formatCallType();
+		return VisitorCallTypeEnum.WEBRTC == callType
+				|| VisitorCallTypeEnum.PHONE == callType;
+	}
+
+	public boolean isWebrtcType() {
+		return VisitorCallTypeEnum.WEBRTC == formatCallType();
+	}
+
+	public boolean isWebrtcAudioType() {
+		return VisitorCallTypeEnum.WEBRTC == formatCallType() && !Boolean.FALSE.equals(audio);
+	}
+
+	public boolean isWebrtcVideoType() {
+		return VisitorCallTypeEnum.WEBRTC == formatCallType() && !Boolean.FALSE.equals(video);
+	}
+
+	public boolean isWebrtcPhoneType() {
+		return VisitorCallTypeEnum.PHONE == formatCallType();
+	}
+
+	public boolean shouldTriggerWebrtcInvite() {
+		return VisitorCallTypeEnum.WEBRTC == formatCallType();
+	}
+
+	public String resolveWebrtcInviteVideoMode() {
+		if (!shouldTriggerWebrtcInvite() || !isWebrtcVideoType()) {
+			return null;
+		}
+		return "TWO_WAY";
+	}
+
+	@Override
+	public Pageable getPageable() {
+		return super.getPageable();
+	}
+
+	
+	
+}

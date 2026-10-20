@@ -1,0 +1,954 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-30 09:14:39
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-01 09:13:24
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  仅支持企业内部员工自用，严禁用于销售、二次销售或者部署SaaS方式销售 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.config.properties;
+
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.EnvironmentAware;
+import org.springframework.core.env.Environment;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+
+import jakarta.annotation.PostConstruct;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import com.bytedesk.core.utils.LicenseValidator;
+
+@Slf4j
+@Getter
+@Setter
+@Component
+@ConfigurationProperties(BytedeskProperties.CONFIG_PREFIX)
+public class BytedeskProperties implements EnvironmentAware {
+
+    public static final String CONFIG_PREFIX = "bytedesk";
+    private static final String APPLICATION_VERSION_KEY = "application.version";
+
+    private static volatile BytedeskProperties instance; // 使用volatile关键字确保可见性
+
+    private Environment environment;
+
+    @Override
+    public void setEnvironment(Environment environment) {
+        this.environment = environment;
+    }
+
+    @PostConstruct
+    public void init() {
+        if (instance == null) {
+            synchronized (BytedeskProperties.class) {
+                if (instance == null) {
+                    // 处理所有可能包含中文的字段
+                    try {
+                        // 处理 Custom 相关字段
+                        if (this.custom != null) {
+                            this.custom.setName(handleChineseText(this.custom.getName(), "BYTEDESK_CUSTOM_NAME"));
+                            this.custom.setDescription(handleChineseText(this.custom.getDescription(), "BYTEDESK_CUSTOM_DESCRIPTION"));
+                            this.custom.setLogo(handleChineseText(this.custom.getLogo(), "BYTEDESK_CUSTOM_LOGO"));
+                            this.custom.setDefaultLlmPrompt(handleChineseText(this.custom.getDefaultLlmPrompt(), "BYTEDESK_CUSTOM_DEFAULT_LLM_PROMPT"));
+                        }
+
+                        // 处理 Admin 相关字段
+                        if (this.admin != null) {
+                            this.admin.setNickname(handleChineseText(this.admin.getNickname(), "BYTEDESK_ADMIN_NICKNAME"));
+                        }
+
+                        // 处理 Organization 相关字段
+                        if (this.organization != null) {
+                            this.organization.setName(handleChineseText(this.organization.getName(), "BYTEDESK_ORGANIZATION_NAME"));
+                        }
+
+                    } catch (Exception e) {
+                        log.error("初始化 BytedeskProperties 时出错", e);
+                    }
+                    instance = this;
+                }
+            }
+        }
+    }
+
+    /**
+     * 许可证载荷缓存 (避免重复验签)
+     */
+    private transient volatile LicenseValidator.LicenseInfo cachedLicenseInfo;
+    private transient volatile String cachedLicenseInfoFor;
+
+    /**
+     * 验证许可证并返回解析后的信息
+     * 结果会被缓存，仅在 licenseKey 变化时重新验证
+     *
+     * @return LicenseInfo 验证成功返回许可证信息，失败返回 null
+     */
+    public LicenseValidator.LicenseInfo validateLicense() {
+        String currentKey = this.licenseKey;
+        if (cachedLicenseInfo != null && currentKey != null && currentKey.equals(cachedLicenseInfoFor)) {
+            return cachedLicenseInfo;
+        }
+        synchronized (this) {
+            if (cachedLicenseInfo != null && currentKey != null && currentKey.equals(cachedLicenseInfoFor)) {
+                return cachedLicenseInfo;
+            }
+            cachedLicenseInfo = LicenseValidator.validate(currentKey);
+            cachedLicenseInfoFor = currentKey;
+            return cachedLicenseInfo;
+        }
+    }
+
+    /**
+     * 当前许可证的 edition（COMMUNITY / ENTERPRISE / PLATFORM），无效时返回 null。
+     */
+    public String getLicenseEdition() {
+        LicenseValidator.LicenseInfo info = validateLicense();
+        return info == null ? null : info.getEdition();
+    }
+
+    /**
+     * 是否为企业版或平台版（仅校验 edition，不校验过期）。
+     */
+    public boolean isEnterpriseOrPlatformEdition() {
+        LicenseValidator.LicenseInfo info = validateLicense();
+        if (info == null || !info.isValid()) {
+            return false;
+        }
+        String edition = info.getEdition();
+        return "ENTERPRISE".equalsIgnoreCase(edition) || "PLATFORM".equalsIgnoreCase(edition);
+    }
+
+    /**
+     * 许可证是否已过期（无效或过期均返回 true，fail-closed）。
+     */
+    public boolean isLicenseExpired() {
+        LicenseValidator.LicenseInfo info = validateLicense();
+        return info == null || !info.isValid() || info.isExpired();
+    }
+
+    /**
+     * IP/域名绑定校验（仅企业版/平台版需要；与前端 validateServerIpOrDomain 逻辑对齐）。
+     * 本地地址、无绑定限制时放行；否则当前 hostname 必须命中 serverIps 或 serverDomains 之一。
+     */
+    public boolean validateServerIpOrDomain(String hostname) {
+        LicenseValidator.LicenseInfo info = validateLicense();
+        if (info == null || !info.isValid()) {
+            return false;
+        }
+        String edition = info.getEdition();
+        if (!("ENTERPRISE".equalsIgnoreCase(edition) || "PLATFORM".equalsIgnoreCase(edition))) {
+            return true;
+        }
+        if (hostname == null || hostname.isBlank()) {
+            return false;
+        }
+        if (isLocalAddress(hostname)) {
+            return true;
+        }
+        java.util.List<String> ips = splitCsv(info.getServerIps());
+        java.util.List<String> domains = splitCsv(info.getServerDomains());
+        if (ips.isEmpty() && domains.isEmpty()) {
+            return true;
+        }
+        if (ips.contains(hostname)) {
+            return true;
+        }
+        for (String domain : domains) {
+            if (domain.equals(hostname)) {
+                return true;
+            }
+            if (domain.startsWith("*.")) {
+                String base = domain.substring(2);
+                if (hostname.equals(base) || hostname.endsWith("." + base)) {
+                    return true;
+                }
+            }
+            if (hostname.endsWith("." + domain)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isLocalAddress(String hostname) {
+        return "localhost".equalsIgnoreCase(hostname)
+                || hostname.startsWith("127.")
+                || hostname.startsWith("192.168.")
+                || hostname.startsWith("10.")
+                || hostname.startsWith("172.")
+                || "[::1]".equals(hostname);
+    }
+
+    private static java.util.List<String> splitCsv(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return java.util.List.of();
+        }
+        java.util.List<String> result = new java.util.ArrayList<>();
+        for (String item : csv.split(",")) {
+            String value = item == null ? "" : item.trim();
+            if (!value.isEmpty()) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 处理可能包含中文的文本
+     * 
+     * @param text 原始文本
+     * @param envKey 对应的环境变量key
+     * @return 处理后的文本
+     */
+    private String handleChineseText(String text, String envKey) {
+        if (!StringUtils.hasText(text)) {
+            return text;
+        }
+
+        try {
+            // 检查是否包含 Unicode 转义序列
+            if (text.contains("\\u")) {
+                // 处理 Unicode 转义序列
+                StringBuilder sb = new StringBuilder();
+                int len = text.length();
+                for (int i = 0; i < len; i++) {
+                    char c = text.charAt(i);
+                    if (c == '\\' && i + 1 < len && text.charAt(i + 1) == 'u') {
+                        String hex = text.substring(i + 2, i + 6);
+                        c = (char) Integer.parseInt(hex, 16);
+                        i += 5;
+                    }
+                    sb.append(c);
+                }
+                return sb.toString();
+            }
+
+            // 检查是否来自环境变量（Docker）
+            String envValue = System.getenv(envKey);
+            if (envValue != null && envValue.equals(text)) {
+                // 如果是来自Docker环境变量，使用UTF-8解码
+                return new String(text.getBytes(), "UTF-8");
+            }
+
+            // 如果是来自properties文件，使用ISO-8859-1到UTF-8的转换
+            return new String(text.getBytes("ISO-8859-1"), "UTF-8");
+
+        } catch (Exception e) {
+            log.error("处理中文文本时出错: {}", envKey, e);
+            return text;
+        }
+    }
+
+    public static BytedeskProperties getInstance() {
+        return instance;
+    }
+
+    private Boolean debug;
+
+    private String version;
+
+    private String licenseKey;
+
+    // 许可证配置
+    private License license = new License();
+
+    // 自定义配置
+    private Custom custom = new Custom();
+
+    // 管理员配置
+    private Admin admin = new Admin();
+
+    // 成员配置
+    private Member member = new Member();
+
+    // 性能测试配置
+    private Testing testing = new Testing();
+    
+    // 组织配置
+    private Organization organization = new Organization();
+
+    // 功能开关配置
+    private Features features = new Features();
+
+    // CORS配置
+    private Cors cors = new Cors();
+
+    // JWT配置 
+    private Jwt jwt = new Jwt();
+
+    // 缓存配置
+    private Cache cache = new Cache();
+
+    // 上传配置
+    private Upload upload = new Upload();
+
+    // 集群配置
+    private Cluster cluster = new Cluster();
+
+    // 知识库配置
+    private Kbase kbase = new Kbase();
+
+    // 阿里云配置
+    private Aliyun aliyun = new Aliyun();
+
+    // 腾讯云配置
+    private Tencent tencent = new Tencent();
+
+    // MinIO 配置（兼容别名，推荐使用 storage 命名空间）
+    private Minio minio = new Minio();
+
+    // S3 兼容对象存储配置（MinIO / RustFS / AWS S3 / OSS / COS 等任意 S3 兼容后端）
+    private Storage storage = new Storage();
+
+    // 呼叫中心配置
+    private Call call = new Call();
+
+    // 微信支付配置
+    private WechatPay wechatPay = new WechatPay();
+
+    public static enum Edition {
+        COMMUNITY, // 社区版-不限人，免费, 功能受限
+        ENTERPRISE, // 企业版-不限人，付费，功能不限
+        PLATFORM // 平台版-不限人数，付费，功能不限
+    }
+
+    @Getter
+    @Setter
+    public static class License {
+        /** RSA 私钥文件路径，用于签发许可证签名 */
+        private String privateKeyPath;
+    }
+
+    @Getter
+    @Setter
+    public static class Custom {
+        private Boolean enabled = false;
+        private String name;
+        private String logo;
+        private String favicon;
+        private String description;
+        /**
+         * 外网可访问的上传 API 地址（完整URL，不带上传路径），用于反向代理/多节点场景。
+         * 例如：https://upload.example.com
+         */
+        private String uploadApiUrl;
+        /**
+         * 外网可访问的 MQTT WebSocket 地址（完整URL），用于反向代理场景。
+         * 例如：wss://api.example.com/websocket
+         */
+        private String mqttWebsocketUrl;
+        /**
+         * 外网可访问的访客工单页面地址（完整URL，不带末尾斜杠），用于邮件中的工单会话直达链接。
+         * 例如：https://support.example.com/ticket
+         */
+        private String ticketHtmlUrl;
+        private Boolean showRightCornerChat = true;
+        private String rightCornerChatPlacement = "bottom-right"; // 位置：bottom-right / bottom-left
+        private Boolean showDemo = true; // 是否显示演示
+        private String privacyPolicyUrl;
+        private String termsOfServiceUrl;
+        private Boolean loginUsernameEnable = true;
+        private Boolean login2faEnable = false;
+        private Integer loginMaxRetryCount = 3;
+        private Integer loginMaxRetryLockTime = 10;
+        private Boolean loginMobileEnable = true;
+        // private Boolean loginEmailEnable = false;
+        private Boolean loginScanEnable = false;
+        // enable wechat login
+        private Boolean loginWechatEnable = false;
+        private Boolean loginGithubEnable = false;
+        private Boolean loginFacebookEnable = false;
+        private Boolean loginGoogleEnable = false;
+        // OIDC 标准登录开关（企业模块 /auth/oidc/*），登录页据此显示 OIDC 按钮
+        private Boolean loginOidcEnable = false;
+        // CAS 单点登录开关（企业模块 /auth/cas/*），登录页据此显示 CAS 按钮
+        private Boolean loginCasEnable = false;
+        // 钉钉登录开关（企业模块 /auth/dingtalk/*）
+        private Boolean loginDingtalkEnable = false;
+        // 抖音登录开关（企业模块 /auth/douyin/*）
+        private Boolean loginDouyinEnable = false;
+        // 飞书登录开关（企业模块 /auth/feishu/*）
+        private Boolean loginFeishuEnable = false;
+        // LDAP 目录登录开关（企业模块 /auth/ldap/*，用户名密码表单）
+        private Boolean loginLdapEnable = false;
+        // OpenID 通用登录开关（企业模块 /auth/openid/*，自配置端点）
+        private Boolean loginOpenidEnable = false;
+        private Boolean docUrlShow = true;
+        private String docUrl;
+        // 是否显示 admin 管理后台帮助文档按钮（HelpDocButton），默认不显示，明确开启才显示
+        private Boolean helpDocButtonEnabled = false;
+        // default lang: en-US, zh-CN, zh-TW
+        private String lang = "zh-CN";
+        // 是否显示注册按钮（仅控制登录页注册入口显隐，不拦截注册接口）
+        private Boolean showRegisterButton = false;
+        // 手机/邮箱验证码登录时，未注册用户是否允许自动创建账号
+        private Boolean autoRegisterOnLogin = true;
+        private Boolean forceValidateMobile = false;
+        private Boolean forceValidateEmail = false;
+        private Boolean forceVisitorAuth = false; // 是否强制访客认证，默认false
+        private Boolean wechatMpSubscribePromptEnabled = false;
+        private String wechatMpSubscribePromptAppId;
+        private String wechatMpLoginNoticeTemplateId;
+        // ===== 微信公众号模板消息（WeChatMpTemplateService 常量可配置化：SuperSystemConfig DB 覆盖 > 此处 properties 兕底）=====
+        // 注意：源码不内置任何真实 AppID/模板 ID（本文件会开源），值由部署方在
+        // starter/src/main/resources/properties/<profile>/core-custom.properties 或环境变量配置
+        /** 发送模板消息使用的公众号 AppID（bytedesk.custom.wechat-mp-app-id） */
+        private String wechatMpAppId;
+        /** 模板消息点击后跳转的小程序 AppID（bytedesk.custom.wechat-mp-mini-program-app-id） */
+        private String wechatMpMiniProgramAppId;
+        /** 小程序打开路径（bytedesk.custom.wechat-mp-mini-program-page-path） */
+        private String wechatMpMiniProgramPagePath;
+        /** 绑定成功通知模板 ID（bytedesk.custom.wechat-mp-bind-template-id） */
+        private String wechatMpBindTemplateId;
+        /** 解绑成功通知模板 ID（bytedesk.custom.wechat-mp-unbind-template-id） */
+        private String wechatMpUnbindTemplateId;
+        /** 充值成功通知模板 ID（bytedesk.custom.wechat-mp-recharge-template-id） */
+        private String wechatMpRechargeTemplateId;
+        /** 续费提醒通知模板 ID（bytedesk.custom.wechat-mp-recharge-remind-template-id） */
+        private String wechatMpRechargeRemindTemplateId;
+        /** 续费成功通知模板 ID（bytedesk.custom.wechat-mp-payment-template-id） */
+        private String wechatMpPaymentTemplateId;
+        /** 客服日报统计模板 ID（bytedesk.custom.wechat-mp-statistic-template-id） */
+        private String wechatMpStatisticTemplateId;
+        /** 满意度评价提醒模板 ID（bytedesk.custom.wechat-mp-rate-template-id） */
+        private String wechatMpRateTemplateId;
+        /** 留言跟单提醒模板 ID（bytedesk.custom.wechat-mp-leave-msg-template-id） */
+        private String wechatMpLeaveMsgTemplateId;
+        /** 工单跟单提醒模板 ID（bytedesk.custom.wechat-mp-ticket-template-id） */
+        private String wechatMpTicketTemplateId;
+        /** 意见反馈提醒模板 ID（bytedesk.custom.wechat-mp-feedback-template-id） */
+        private String wechatMpFeedbackTemplateId;
+        /** 登录提醒模板 ID（非扫码登录成功通知，bytedesk.custom.wechat-mp-login-template-id） */
+        private String wechatMpLoginTemplateId;
+        /** 新访客接待提醒模板 ID（bytedesk.custom.wechat-mp-new-visitor-template-id） */
+        private String wechatMpNewVisitorTemplateId;
+        /**
+         * 自定义默认 LLM Prompt；为空时回退到代码内置默认值。
+         */
+        private String defaultLlmPrompt;
+
+        /**
+         * 兼容旧配置名 bytedesk.custom.allow-register（环境变量 BYTEDESK_CUSTOM_ALLOW_REGISTER），
+         * 绑定时映射到 showRegisterButton，避免升级后旧配置失效。
+         * @deprecated 请使用 bytedesk.custom.show-register-button
+         */
+        @Deprecated
+        public void setAllowRegister(Boolean allowRegister) {
+            this.showRegisterButton = allowRegister;
+        }
+    }
+
+    @Getter
+    @Setter
+    public static class Admin {
+        private String email;
+        private String password;
+        // private String passwordDefault;
+        private String nickname;
+        private String mobile;
+        private List<String> mobileWhitelist = new ArrayList<>();
+        private List<String> emailWhitelist = new ArrayList<>();
+        private String validateCode;
+    }
+
+    @Getter
+    @Setter
+    public static class Member {
+        private String password;
+    }
+
+    @Getter
+    @Setter
+    public static class Testing {
+        private Boolean enabled = false;
+        // private Integer accountCount = 300;
+        // private String accountUsername = "test_user";
+        // private String accountPassword = "password";
+        private Boolean disableCaptcha = false;
+        private Boolean disableIpFilter = false;
+        // whitelist ip for performance testing
+        private List<String> ipWhitelist = new ArrayList<>();
+    }
+    
+    @Getter
+    @Setter 
+    public static class Organization {
+        private String name;
+        private String code;
+        // when user has no organization after login, allow creating a new organization
+        private Boolean allowCreateOrg = true;
+        // when user has no organization after login, allow applying to join an existing organization
+        private Boolean allowJoinOrg = true;
+        // default vip level for new organizations
+        private Integer defaultVipLevel = 0;
+        // default validity period (days) for new organizations
+        private Integer defaultVipDays = 365;
+        // default limits for new organizations
+        private Integer defaultMaxMembers = 20;
+        private Integer defaultMaxAgents = 20;
+        private Integer defaultMaxWorkgroups = 20;
+    }
+
+    @Getter
+    @Setter
+    public static class Features {
+        private Boolean javaAi = false;
+        // private Boolean pythonAi = true;
+        private String emailType = "javamail";
+        // private Date startDate;
+        // private Integer freeDays = 30;
+        private String avatarBaseUrl;
+    }
+
+    @Getter
+    @Setter
+    public static class Cors {
+        private String allowedOrigins;
+    }
+
+    @Getter
+    @Setter
+    public static class Jwt {
+        private String secretKey;
+        private String expiration;
+        private String refreshTokenExpiration;
+    }
+
+    @Getter
+    @Setter
+    public static class Cache {
+        private Integer level;
+        private String prefix;
+        private String redisStreamKey;
+    }
+
+    @Getter
+    @Setter
+    public static class Upload {
+        private String type;
+        private String dir;
+        private String url;
+    }
+
+    @Getter
+    @Setter
+    public static class Cluster {
+        private Boolean enabled;
+        private List<String> nodes = new ArrayList<>();
+        private String host = "230.0.0.0";
+        private Integer port = 6781;
+    }
+
+    @Getter
+    @Setter
+    public static class Kbase {
+        private String theme;
+        private String htmlPath;
+        private String apiUrl;
+    }
+
+    @Getter
+    @Setter
+    public static class Aliyun {
+        private String accessKeyId;
+        private String accessKeySecret;
+        private Oss oss = new Oss();
+        private Sms sms = new Sms();
+
+        @Getter
+    @Setter
+        public static class Oss {
+            private String endpoint;
+            private String baseUrl;
+            private String bucketName;
+        }
+
+        @Getter
+    @Setter
+        public static class Sms {
+            private String signName;
+            private String templateCode;
+        }
+    }
+
+    @Getter
+    @Setter
+    public static class Tencent {
+        private String appId;
+        private String secretId;
+        private String secretKey;
+        private Bucket bucket = new Bucket();
+
+        @Getter
+        @Setter
+        public static class Bucket {
+            private String location;
+            private String name;
+            private String domain;
+        }
+    }
+
+    @Getter
+    @Setter
+    public static class WechatPay {
+        private Boolean enabled = false;
+        private String certPath;
+        private String appId;
+        private String mchId;
+        private String key;
+        private String notifyUrl;
+    }
+
+    @Getter
+    @Setter
+    public static class Minio {
+        private Boolean enabled = false;
+        private String endpoint = "http://127.0.0.1:19000";
+        private String accessKey = "minioadmin";
+        private String secretKey = "minioadmin123";
+        private String bucketName = "bytedesk";
+        private String region = "us-east-1";
+        private Boolean secure = false;
+    }
+
+    /**
+     * S3 兼容对象存储统一配置（推荐命名空间，向下兼容 bytedesk.minio.*）
+     *
+     * provider=local（默认）：本地磁盘存储，行为与 minio.enabled=false 一致
+     * provider=s3：启用 S3 兼容后端（MinIO / RustFS / AWS S3 / 阿里云 OSS / 腾讯云 COS 等）
+     *
+     * 字段解析优先级：storage.* 显式配置优先；未配置时回落到 minio.* 旧键，存量部署零改动
+     */
+    @Getter
+    @Setter
+    public static class Storage {
+        /** local | s3，s3 = 任意 S3 兼容后端；默认 null 表示未配置，回落 minio.enabled 判定 */
+        private String provider;
+        private String endpoint;
+        private String accessKey;
+        private String secretKey;
+        private String bucketName;
+        private String region;
+        private Boolean secure;
+        /** 是否对桶设置公开读策略（默认 true 保持存量行为）；false 时跳过策略并改用预签名直链 */
+        private Boolean publicRead;
+        /** 预签名 URL 有效期（天），SigV4 协议上限 7 天；仅 public-read=false 时生效 */
+        private Integer presignedExpiryDays = 7;
+    }
+
+    @Getter
+    @Setter
+    public static class Call {
+        private Freeswitch freeswitch = new Freeswitch();
+
+        @Getter
+        @Setter
+        public static class Freeswitch {
+            private String recordingsBaseUrl;
+        }
+    }
+
+    // 为了保持向后兼容,添加getter方法
+    public String getEmail() {
+        return admin.getEmail();
+    }
+
+    public String getPassword() {
+        return admin.getPassword();
+    }
+
+    // 导入成员默认密码
+    public String getMemberDefaultPassword() {
+        return member.getPassword();
+    }
+
+    public String getNickname() {
+        return admin.getNickname();
+    }
+
+    public String getMobile() {
+        return admin.getMobile();
+    }
+
+    public List<String> getMobileWhitelist() {
+        return admin.getMobileWhitelist();
+    }
+
+    public List<String> getEmailWhitelist() {
+        return admin.getEmailWhitelist();
+    }
+
+    public String getValidateCode() {
+        return admin.getValidateCode();
+    }
+
+    public String getOrganizationName() {
+        return organization.getName();
+    }
+
+    public String getOrganizationCode() {
+        return organization.getCode();
+    }
+
+    public Boolean getJavaAi() {
+        return features.getJavaAi();
+    }
+
+    public String getEmailType() {
+        return features.getEmailType();
+    }
+
+    // 如果为空，则使用默认值
+    public String getAvatarBaseUrl() {
+        if (StringUtils.hasText(features.getAvatarBaseUrl())) {
+            return features.getAvatarBaseUrl();
+        }
+        return "https://cdn.weiyuai.cn";
+    }
+
+    public String getCorsAllowedOrigins() {
+        return cors.getAllowedOrigins();
+    }
+
+    public String getJwtSecretKey() {
+        return jwt.getSecretKey();
+    }
+
+    public String getJwtExpiration() {
+        return jwt.getExpiration();
+    }
+
+    public String getJwtRefreshTokenExpiration() {
+        return jwt.getRefreshTokenExpiration();
+    }
+
+    public Integer getCacheLevel() {
+        return cache.getLevel();
+    }
+
+    public String getCachePrefix() {
+        return cache.getPrefix();
+    }
+
+    public String getRedisStreamKey() {
+        return cache.getRedisStreamKey();
+    }
+
+    public String getUploadType() {
+        return upload.getType();
+    }
+
+    public String getUploadDir() {
+        return upload.getDir();
+    }
+
+    public String getUploadUrl() {
+        return upload.getUrl();
+    }
+
+    public Boolean getClusterEnabled() {
+        return cluster.getEnabled();
+    }
+
+    public List<String> getClusterNodes() {
+        return cluster.getNodes();
+    }
+
+    public String getClusterHost() {
+        return cluster.getHost();
+    }
+
+    public int getClusterPort() {
+        return cluster.getPort();
+    }
+
+    public String getKbaseTheme() {
+        return kbase.getTheme();
+    }
+
+    public String getKbaseHtmlPath() {
+        return kbase.getHtmlPath();
+    }
+
+    public String getKbaseApiUrl() {
+        return kbase.getApiUrl();
+    }
+
+    public Boolean getMinioEnabled() {
+        return minio.getEnabled();
+    }
+
+    // ==================== S3 兼容对象存储统一判定（storage.* 优先，minio.* 兜底） ====================
+
+    /** storage.provider 取值：s3（任意 S3 兼容后端） */
+    private static final String PROVIDER_S3 = "s3";
+
+    /** S3 兼容存储是否启用：bytedesk.storage.provider=s3 或旧键 bytedesk.minio.enabled=true 任一成立 */
+    public boolean isS3StorageEnabled() {
+        return isStorageProviderS3() || Boolean.TRUE.equals(minio.getEnabled());
+    }
+
+    /** 是否显式启用新命名空间（storage.provider=s3）；仅此时 storage.* 字段才优先于 minio.* */
+    private boolean isStorageProviderS3() {
+        return PROVIDER_S3.equalsIgnoreCase(storage.getProvider() == null ? "" : storage.getProvider());
+    }
+
+    /** 当前存储 provider 描述，用于日志 */
+    public String getStorageProviderName() {
+        if (!isS3StorageEnabled()) {
+            return "local";
+        }
+        return "s3";
+    }
+
+    public String getStorageEndpoint() {
+        return isStorageProviderS3() && hasText(storage.getEndpoint()) ? storage.getEndpoint() : getMinioEndpoint();
+    }
+
+    public String getStorageAccessKey() {
+        return isStorageProviderS3() && hasText(storage.getAccessKey()) ? storage.getAccessKey() : getMinioAccessKey();
+    }
+
+    public String getStorageSecretKey() {
+        return isStorageProviderS3() && hasText(storage.getSecretKey()) ? storage.getSecretKey() : getMinioSecretKey();
+    }
+
+    public String getStorageBucketName() {
+        return isStorageProviderS3() && hasText(storage.getBucketName()) ? storage.getBucketName() : getMinioBucketName();
+    }
+
+    public String getStorageRegion() {
+        return isStorageProviderS3() && hasText(storage.getRegion()) ? storage.getRegion() : getMinioRegion();
+    }
+
+    public Boolean getStorageSecure() {
+        return isStorageProviderS3() && storage.getSecure() != null ? storage.getSecure() : getMinioSecure();
+    }
+
+    /** 是否对桶设置公开读策略（默认 true 保持存量行为） */
+    public boolean isStoragePublicRead() {
+        if (isStorageProviderS3() && storage.getPublicRead() != null) {
+            return storage.getPublicRead();
+        }
+        return true;
+    }
+
+    /** 预签名 URL 有效期（秒），SigV4 上限 7 天 */
+    public int getStoragePresignedExpirySeconds() {
+        int days = storage.getPresignedExpiryDays() == null ? 7 : storage.getPresignedExpiryDays();
+        if (days < 1) {
+            days = 1;
+        }
+        if (days > 7) {
+            days = 7;
+        }
+        return days * 24 * 3600;
+    }
+
+    public Storage getStorage() {
+        return storage;
+    }
+
+    private static boolean hasText(String text) {
+        return text != null && !text.trim().isEmpty();
+    }
+
+    public String getMinioEndpoint() {
+        return minio.getEndpoint();
+    }
+
+    public String getMinioAccessKey() {
+        return minio.getAccessKey();
+    }
+
+    public String getMinioSecretKey() {
+        return minio.getSecretKey();
+    }
+
+    public String getMinioBucketName() {
+        return minio.getBucketName();
+    }
+
+    public String getMinioRegion() {
+        return minio.getRegion();
+    }
+
+    public Boolean getMinioSecure() {
+        return minio.getSecure();
+    }
+
+    /**
+     * 检查是否禁用IP过滤
+     * @return 如果禁用IP过滤，返回true；否则返回false
+     */
+    public boolean isDisableIpFilter() {
+        return testing != null && 
+               Boolean.TRUE.equals(testing.getEnabled()) && 
+               Boolean.TRUE.equals(testing.getDisableIpFilter());
+    }
+
+    /**
+     * 检查是否禁用验证码
+     * @return 如果禁用验证码，返回true；否则返回false
+     */
+    public boolean isDisableCaptcha() {
+        return testing != null && 
+               Boolean.TRUE.equals(testing.getEnabled()) && 
+               Boolean.TRUE.equals(testing.getDisableCaptcha());
+    }
+
+    public Boolean isAdminIdentifier(String identifier) {
+        if (identifier == null || identifier.isEmpty()) {
+            return false;
+        }
+        return identifier.equals(admin.getMobile()) || identifier.equals(admin.getEmail());
+    }
+
+    public Boolean isInWhitelist(String user) {
+        if (user == null || user.isEmpty()) {
+            return false;
+        }
+        if (admin.getMobileWhitelist() == null || admin.getEmailWhitelist() == null) {
+            return false;
+        }
+        return admin.getMobileWhitelist().contains(user) || 
+               admin.getEmailWhitelist().contains(user);
+    }
+
+    /**
+     * 获取 licenseKey（新格式为 RSA 签名，旧格式为 Base64 编码）
+     * 不再进行 AES 加密，前端通过 RSA 验签或 Base64 解码获取信息。
+     *
+     * @return licenseKey 字符串
+     */
+    public String getLicenseKey() {
+        return this.licenseKey;
+    }
+
+    /**
+     * 获取原始licenseKey（仅用于内部使用）
+     * @return 原始licenseKey字符串
+     */
+    public String getOriginalAppkey() {
+        return this.licenseKey;
+    }
+
+    public String getVersion() {
+        if (StringUtils.hasText(this.version)) {
+            return this.version;
+        }
+        return environment != null ? environment.getProperty(APPLICATION_VERSION_KEY) : null;
+    }
+
+}

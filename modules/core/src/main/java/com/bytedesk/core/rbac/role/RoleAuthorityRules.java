@@ -1,0 +1,433 @@
+package com.bytedesk.core.rbac.role;
+
+import java.util.Set;
+
+import org.springframework.util.StringUtils;
+
+/**
+ * Centralized RBAC role/authority rules used by RoleInitializer,
+ * RoleEventListener, and RoleRestService.
+ */
+public final class RoleAuthorityRules {
+
+    private RoleAuthorityRules() {
+    }
+
+    // kbase read permission prefixes (modules/kbase)
+    // Keep as literals to avoid core -> kbase module dependency.
+    public static final String KBASE_PREFIX = "KBASE_";
+    public static final String ARTICLE_PREFIX = "ARTICLE_";
+    public static final String MATERIAL_PREFIX = "MATERIAL_";
+    public static final String TABOO_PREFIX = "TABOO_";
+    public static final String TABOO_MESSAGE_PREFIX = "TABOO_MESSAGE_";
+    public static final String QUICK_REPLY_PREFIX = "QUICK_REPLY_";
+    public static final String AUTO_REPLY_KEYWORD_PREFIX = "AUTO_REPLY_KEYWORD_";
+    public static final String AUTO_REPLY_FIXED_PREFIX = "AUTO_REPLY_FIXED_";
+    public static final String WEBSITE_PREFIX = "WEBSITE_";
+    public static final String FILE_PREFIX = "FILE_";
+    public static final String CHUNK_PREFIX = "CHUNK_";
+    public static final String TEXT_PREFIX = "TEXT_";
+    public static final String FAQ_PREFIX = "FAQ_";
+    public static final String WEBPAGE_PREFIX = "WEBPAGE_";
+    public static final String COMMENT_PREFIX = "COMMENT_";
+    public static final String KBASE_STATISTIC_PREFIX = "KBASE_STATISTIC_"; // enterprise/kbase
+
+    public static final Set<String> KBASE_READ_PREFIXES = Set.of(
+            KBASE_PREFIX,
+            ARTICLE_PREFIX,
+            MATERIAL_PREFIX,
+            TABOO_PREFIX,
+            TABOO_MESSAGE_PREFIX,
+            QUICK_REPLY_PREFIX,
+            AUTO_REPLY_KEYWORD_PREFIX,
+            AUTO_REPLY_FIXED_PREFIX,
+            WEBSITE_PREFIX,
+            FILE_PREFIX,
+            CHUNK_PREFIX,
+            TEXT_PREFIX,
+            FAQ_PREFIX,
+            WEBPAGE_PREFIX,
+            COMMENT_PREFIX,
+            KBASE_STATISTIC_PREFIX);
+
+    public static final String SETTINGS_CREATE = "SETTINGS_CREATE";
+    public static final String SETTINGS_UPDATE = "SETTINGS_UPDATE";
+    public static final String SETTINGS_READ = "SETTINGS_READ";
+    public static final String SETTINGS_DELETE = "SETTINGS_DELETE";
+    public static final String SETTINGS_EXPORT = "SETTINGS_EXPORT";
+
+    // core (modules/core)
+    // Keep as literals to avoid spreading string values across the codebase.
+    public static final String USER_READ = "USER_READ";
+    public static final String USER_UPDATE = "USER_UPDATE";
+
+    public static final String MESSAGE_READ = "MESSAGE_READ";
+    public static final String MESSAGE_CREATE = "MESSAGE_CREATE";
+
+    public static final String THREAD_READ = "THREAD_READ";
+    public static final String THREAD_CREATE = "THREAD_CREATE";
+    public static final String THREAD_UPDATE = "THREAD_UPDATE";
+
+    public static final String ORGANIZATION_CREATE = "ORGANIZATION_CREATE";
+    public static final String ORGANIZATION_READ = "ORGANIZATION_READ";
+    public static final String ORGANIZATION_UPDATE = "ORGANIZATION_UPDATE";
+
+    public static final String MEMBER_READ = "MEMBER_READ";
+    public static final String MEMBER_UPDATE = "MEMBER_UPDATE";
+
+    public static final String GROUP_READ = "GROUP_READ";
+    public static final String GROUP_CREATE = "GROUP_CREATE";
+    public static final String GROUP_UPDATE = "GROUP_UPDATE";
+    public static final String GROUP_DELETE = "GROUP_DELETE";
+
+    public static final String DEPARTMENT_READ = "DEPARTMENT_READ";
+
+    // calendar (modules/core)
+    public static final String CALENDAR_READ = "CALENDAR_READ";
+    public static final String CALENDAR_CREATE = "CALENDAR_CREATE";
+    public static final String CALENDAR_UPDATE = "CALENDAR_UPDATE";
+    public static final String CALENDAR_DELETE = "CALENDAR_DELETE";
+    public static final String CALENDAR_EXPORT = "CALENDAR_EXPORT";
+
+    // task (modules/core)
+    public static final String TASK_READ = "TASK_READ";
+    public static final String TASK_CREATE = "TASK_CREATE";
+    public static final String TASK_UPDATE = "TASK_UPDATE";
+    public static final String TASK_DELETE = "TASK_DELETE";
+    public static final String TASK_EXPORT = "TASK_EXPORT";
+
+    // task_list (modules/core)
+    public static final String TASK_LIST_READ = "TASK_LIST_READ";
+    public static final String TASK_LIST_CREATE = "TASK_LIST_CREATE";
+    public static final String TASK_LIST_UPDATE = "TASK_LIST_UPDATE";
+    public static final String TASK_LIST_DELETE = "TASK_LIST_DELETE";
+    public static final String TASK_LIST_EXPORT = "TASK_LIST_EXPORT";
+
+    // task_comment (modules/core)
+    public static final String TASK_COMMENT_READ = "TASK_COMMENT_READ";
+    public static final String TASK_COMMENT_CREATE = "TASK_COMMENT_CREATE";
+    public static final String TASK_COMMENT_UPDATE = "TASK_COMMENT_UPDATE";
+    public static final String TASK_COMMENT_DELETE = "TASK_COMMENT_DELETE";
+    public static final String TASK_COMMENT_EXPORT = "TASK_COMMENT_EXPORT";
+
+    // ticket (modules/ticket)
+    // Keep as literals to avoid core -> ticket module dependency.
+    public static final String TICKET_READ = "TICKET_READ";
+    public static final String TICKET_CREATE = "TICKET_CREATE";
+    public static final String TICKET_UPDATE = "TICKET_UPDATE";
+    public static final String TICKET_DELETE = "TICKET_DELETE";
+
+    // ticket category (modules/ticket)
+    // Keep as literals to avoid core -> ticket module dependency.
+    public static final String CATEGORY_READ = "CATEGORY_READ";
+    public static final String CATEGORY_CREATE = "CATEGORY_CREATE";
+    public static final String CATEGORY_UPDATE = "CATEGORY_UPDATE";
+    public static final String CATEGORY_DELETE = "CATEGORY_DELETE";
+
+    // room (modules/meet)
+    public static final String ROOM_READ = "ROOM_READ";
+    public static final String ROOM_CREATE = "ROOM_CREATE";
+    public static final String ROOM_UPDATE = "ROOM_UPDATE";
+    public static final String ROOM_DELETE = "ROOM_DELETE";
+
+    // notification (modules/notification)
+    public static final String NOTIFICATION_READ = "NOTIFICATION_READ";
+    public static final String NOTIFICATION_CREATE = "NOTIFICATION_CREATE";
+    public static final String NOTIFICATION_UPDATE = "NOTIFICATION_UPDATE";
+    public static final String NOTIFICATION_DELETE = "NOTIFICATION_DELETE";
+    public static final String NOTIFICATION_EXPORT = "NOTIFICATION_EXPORT";
+
+    // message_leave (modules/service)
+    // Keep as literals to avoid core -> service module dependency.
+    public static final String MESSAGE_LEAVE_READ = "MESSAGE_LEAVE_READ";
+    public static final String MESSAGE_LEAVE_UPDATE = "MESSAGE_LEAVE_UPDATE";
+
+    // message_rating (modules/service)
+    // Keep as literals to avoid core -> service module dependency.
+    public static final String MESSAGE_RATING_READ = "MESSAGE_RATING_READ";
+    public static final String MESSAGE_RATING_UPDATE = "MESSAGE_RATING_UPDATE";
+
+    // agent (modules/service)
+    // Keep as literals to avoid core -> service module dependency.
+    public static final String AGENT_READ = "AGENT_READ";
+    public static final String AGENT_UPDATE = "AGENT_UPDATE";
+    public static final String AGENT_SEAT_READ = "AGENT_SEAT_READ";
+
+    // agent_status (modules/service)
+    // Keep as literals to avoid core -> service module dependency.
+    public static final String AGENT_STATUS_READ = "AGENT_STATUS_READ";
+    public static final String AGENT_STATUS_CREATE = "AGENT_STATUS_CREATE";
+    // 
+    public static final String AGENT_SETTINGS_READ = "AGENT_SETTINGS_READ";
+    public static final String AGENT_SETTINGS_UPDATE = "AGENT_SETTINGS_UPDATE";
+
+    // enterprise/call
+    public static final String CTI_READ = "CTI_READ";
+
+    // queue (modules/service)
+    // Keep as literals to avoid core -> service module dependency.
+    public static final String QUEUE_READ = "QUEUE_READ";
+    // public static final String QUEUE_CREATE = "QUEUE_CREATE";
+    public static final String QUEUE_UPDATE = "QUEUE_UPDATE";
+
+    // queue_member (modules/service)
+    // 客服工作台 AI 能力（会话小结/意图/情绪/智能质检 POST /api/v1/queue/member/summary 等）依赖
+    public static final String QUEUE_MEMBER_READ = "QUEUE_MEMBER_READ";
+    public static final String QUEUE_MEMBER_UPDATE = "QUEUE_MEMBER_UPDATE";
+
+    // 
+    public static final String ROUTING_POOL_READ = "ROUTING_POOL_READ";
+    public static final String ROUTING_POOL_UPDATE = "ROUTING_POOL_UPDATE";
+
+    // workgroup (modules/service)
+    // Keep as literals to avoid core -> service module dependency.
+    public static final String WORKGROUP_READ = "WORKGROUP_READ";
+
+    // topic_subscription (modules/core)
+    public static final String TOPIC_SUBSCRIPTION_READ = "TOPIC_SUBSCRIPTION_READ";
+
+    // kbase (modules/kbase)
+    // Keep as literals to avoid core -> kbase module dependency.
+    public static final String KBASE_READ = "KBASE_READ";
+    public static final String FAQ_READ = "FAQ_READ";
+    public static final String QUICK_REPLY_CREATE = "QUICK_REPLY_CREATE";
+    public static final String QUICK_REPLY_UPDATE = "QUICK_REPLY_UPDATE";
+    public static final String QUICK_REPLY_DELETE = "QUICK_REPLY_DELETE";
+
+    // tag (modules/core)
+    public static final String TAG_READ = "TAG_READ";
+    public static final String TAG_CREATE = "TAG_CREATE";
+    public static final String TAG_UPDATE = "TAG_UPDATE";
+    public static final String TAG_DELETE = "TAG_DELETE";
+    public static final String TAG_EXPORT = "TAG_EXPORT";
+
+    // visitor (modules/service)
+    public static final String VISITOR_READ = "VISITOR_READ";
+    public static final String VISITOR_CREATE = "VISITOR_CREATE";
+    public static final String VISITOR_UPDATE = "VISITOR_UPDATE";
+    public static final String VISITOR_DELETE = "VISITOR_DELETE";
+    public static final String VISITOR_EXPORT = "VISITOR_EXPORT";
+
+    // browse 
+    public static final String BROWSE_READ = "BROWSE_READ";
+    public static final String BROWSE_CREATE = "BROWSE_CREATE";
+    public static final String BROWSE_UPDATE = "BROWSE_UPDATE";
+    public static final String BROWSE_DELETE = "BROWSE_DELETE"; 
+    public static final String BROWSE_EXPORT = "BROWSE_EXPORT";
+
+    // shop
+    public static final String SHOP_READ = "SHOP_READ";
+    public static final String SHOP_CREATE = "SHOP_CREATE";
+    public static final String SHOP_UPDATE = "SHOP_UPDATE";
+    public static final String SHOP_DELETE = "SHOP_DELETE";
+    public static final String SHOP_EXPORT = "SHOP_EXPORT";
+
+    // order
+    public static final String ORDER_READ = "ORDER_READ";
+    public static final String ORDER_CREATE = "ORDER_CREATE";
+    public static final String ORDER_UPDATE = "ORDER_UPDATE";
+    public static final String ORDER_DELETE = "ORDER_DELETE";
+    public static final String ORDER_EXPORT = "ORDER_EXPORT";
+
+    // goods
+    public static final String GOODS_READ = "GOODS_READ";
+    public static final String GOODS_CREATE = "GOODS_CREATE";
+    public static final String GOODS_UPDATE = "GOODS_UPDATE";
+    public static final String GOODS_DELETE = "GOODS_DELETE";
+    public static final String GOODS_EXPORT = "GOODS_EXPORT";
+
+    // robot
+    public static final String ROBOT_READ = "ROBOT_READ";
+    public static final String ROBOT_CREATE = "ROBOT_CREATE";
+    public static final String ROBOT_UPDATE = "ROBOT_UPDATE";
+    public static final String ROBOT_DELETE = "ROBOT_DELETE";
+    public static final String ROBOT_EXPORT = "ROBOT_EXPORT";
+
+    // ticket comment (modules/ticket)
+    public static final String TICKET_COMMENT_READ = "TICKET_COMMENT_READ";
+    public static final String TICKET_COMMENT_CREATE = "TICKET_COMMENT_CREATE";
+    public static final String TICKET_COMMENT_UPDATE = "TICKET_COMMENT_UPDATE";
+    public static final String TICKET_COMMENT_DELETE = "TICKET_COMMENT_DELETE";
+    // public static final String TICKET_COMMENT_EXPORT = "TICKET_COMMENT_EXPORT";
+
+    public static final Set<String> DEFAULT_ROLE_USER_AUTHORITY_VALUES = Set.of(
+            USER_READ,
+            USER_UPDATE,
+            //
+            MESSAGE_READ,
+            MESSAGE_CREATE,
+            //
+            THREAD_READ,
+            THREAD_CREATE,
+            THREAD_UPDATE,
+
+            // calendar
+            CALENDAR_READ,
+            CALENDAR_CREATE,
+            CALENDAR_UPDATE,
+            CALENDAR_DELETE,
+            CALENDAR_EXPORT,
+
+            // task
+            TASK_READ,
+            TASK_CREATE,
+            TASK_UPDATE,
+            TASK_DELETE,
+            TASK_EXPORT,
+
+            // task list
+            TASK_LIST_READ,
+            TASK_LIST_CREATE,
+            TASK_LIST_UPDATE,
+            TASK_LIST_DELETE,
+            TASK_LIST_EXPORT,
+
+            // task comment
+            TASK_COMMENT_READ,
+            TASK_COMMENT_CREATE,
+            TASK_COMMENT_UPDATE,
+            TASK_COMMENT_DELETE,
+            TASK_COMMENT_EXPORT,
+            
+            // ticket category
+            CATEGORY_READ,
+            CATEGORY_CREATE,
+            CATEGORY_UPDATE,
+            CATEGORY_DELETE,
+            //
+            TICKET_READ,
+            TICKET_CREATE,
+            TICKET_UPDATE,
+            TICKET_DELETE,
+            //
+            ORGANIZATION_CREATE,
+            ORGANIZATION_READ,
+            ORGANIZATION_UPDATE,
+            TOPIC_SUBSCRIPTION_READ,
+            // 
+            DEPARTMENT_READ,
+            //
+            MEMBER_READ,
+            MEMBER_UPDATE,
+            //
+            GROUP_READ,
+            GROUP_CREATE,
+            GROUP_UPDATE,
+            GROUP_DELETE,
+            //
+            AGENT_SEAT_READ,
+            // 
+            ROOM_READ,
+            ROOM_CREATE,
+            ROOM_UPDATE,
+            ROOM_DELETE,
+            // 
+            NOTIFICATION_READ,
+            NOTIFICATION_CREATE,
+            NOTIFICATION_UPDATE,
+            NOTIFICATION_DELETE,
+            NOTIFICATION_EXPORT,
+
+            // 
+            TAG_CREATE,
+            TAG_READ,
+            TAG_UPDATE,
+            TAG_DELETE,
+
+            // robot
+            ROBOT_READ,
+            ROBOT_CREATE,
+            ROBOT_UPDATE,
+            ROBOT_DELETE,
+
+            // ticket comment
+            TICKET_COMMENT_READ,
+            TICKET_COMMENT_CREATE,
+            TICKET_COMMENT_UPDATE,
+            TICKET_COMMENT_DELETE
+    );
+
+    /**
+     * ROLE_AGENT: 额外默认权限（非知识库 read 前缀匹配范围内的权限）
+     */
+    public static final Set<String> DEFAULT_ROLE_AGENT_EXTRA_AUTHORITY_VALUES = Set.of(
+            MESSAGE_LEAVE_READ,
+            MESSAGE_LEAVE_UPDATE,
+            MESSAGE_RATING_READ,
+            MESSAGE_RATING_UPDATE,
+            // 
+            AGENT_READ,
+            AGENT_UPDATE,
+            AGENT_SEAT_READ,
+            AGENT_STATUS_READ,
+            AGENT_STATUS_CREATE,
+            AGENT_SETTINGS_READ,
+            AGENT_SETTINGS_UPDATE,
+            // 
+            CTI_READ,
+            QUEUE_READ,
+            // 会话小结等 AI 接口（/api/v1/queue/member/summary）需要 QUEUE_MEMBER_UPDATE，客服默认具备
+            QUEUE_MEMBER_READ,
+            QUEUE_MEMBER_UPDATE,
+            WORKGROUP_READ,
+            ROUTING_POOL_READ,
+            ROUTING_POOL_UPDATE,
+
+            // 快捷回复：ROLE_AGENT 默认需要增删改
+            QUICK_REPLY_CREATE,
+            QUICK_REPLY_UPDATE,
+            QUICK_REPLY_DELETE,
+
+            // 
+            VISITOR_READ,
+            VISITOR_CREATE,
+            VISITOR_UPDATE,
+            VISITOR_DELETE,
+            VISITOR_EXPORT,
+
+            // 
+            BROWSE_READ,
+            BROWSE_CREATE,
+            BROWSE_UPDATE,
+            BROWSE_DELETE,
+            BROWSE_EXPORT,
+
+            // shop
+            SHOP_READ,
+            SHOP_CREATE,
+            SHOP_UPDATE,
+            SHOP_DELETE,
+            SHOP_EXPORT,
+
+            // order
+            ORDER_READ,
+            ORDER_CREATE,
+            ORDER_UPDATE,
+            ORDER_DELETE,   
+            ORDER_EXPORT,
+
+            // goods
+            GOODS_READ,
+            GOODS_CREATE,
+            GOODS_UPDATE,
+            GOODS_DELETE,
+            GOODS_EXPORT,
+
+            QUEUE_UPDATE
+        );
+
+    public static boolean isKbaseReadPermission(String permissionValue) {
+        if (!StringUtils.hasText(permissionValue)) {
+            return false;
+        }
+        if (!permissionValue.endsWith("_READ")) {
+            return false;
+        }
+        return KBASE_READ_PREFIXES.stream().anyMatch(permissionValue::startsWith);
+    }
+
+    public static boolean isAdminExcludedPermission(String permissionValue) {
+        return SETTINGS_CREATE.equals(permissionValue) || SETTINGS_UPDATE.equals(permissionValue)
+                || SETTINGS_DELETE.equals(permissionValue);
+    }
+}

@@ -1,0 +1,124 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-03-22 22:59:48
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-02 08:22:30
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.article;
+
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+import com.bytedesk.core.base.BaseRequest;
+
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.converter.StringListConverter;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.SuperBuilder;
+import lombok.experimental.Accessors;
+
+@Getter
+@Setter
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = false)
+@AllArgsConstructor
+@NoArgsConstructor
+public class ArticleRequest extends BaseRequest {
+
+    private static final long serialVersionUID = 1L;
+
+    private String title;
+
+    private String summary;
+
+    private String coverImageUrl;
+
+    private String contentMarkdown;
+
+    private String contentHtml;
+
+    @Builder.Default
+    @Convert(converter = StringListConverter.class)
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private List<String> tagList = new ArrayList<>();
+
+    private ZonedDateTime startDate;
+
+    private ZonedDateTime endDate;
+
+    @Builder.Default
+    private Boolean top = false;
+
+    @Builder.Default
+    private Boolean published = false;
+
+    @Builder.Default
+    private Integer readCount = 0;
+
+    @Builder.Default
+    private Integer likeCount = 0;
+
+    // editor 编辑者
+    @Builder.Default
+    private String editor = BytedeskConsts.EMPTY_STRING;
+
+    // 是否需要审核
+    @Builder.Default
+    private Boolean needAudit = false;
+
+    // 审核状态
+    @Builder.Default
+    private String auditStatus = ArticleAuditStatusEnum.PENDING.name();
+
+    // 审核意见
+    @Builder.Default
+    private String auditOpinion = BytedeskConsts.EMPTY_STRING;
+
+    // 审核人
+    @Builder.Default
+    private String auditUser = BytedeskConsts.EMPTY_STRING;
+
+    // elastic 索引状态 (ArticleStatusEnum: PENDING, PROCESSING, SUCCESS, ERROR)
+    @Builder.Default
+    private String elasticStatus = ArticleStatusEnum.NEW.name();
+
+    // 向量索引状态 (ArticleStatusEnum: PENDING, PROCESSING, SUCCESS, ERROR)
+    @Builder.Default
+    private String vectorStatus = ArticleStatusEnum.NEW.name();
+
+    private String categoryUid;
+
+    private String sourceUrl;
+
+    private String sourceName;
+
+    @Builder.Default
+    private Boolean showSource = false;
+
+    private String kbUid;
+
+    // used for client query
+    private String componentType;
+
+    // 附件 uploadUid 列表：正文之外的独立附件（如截图、文件），参考 TicketRequest.uploadUids
+    private Set<String> uploadUids;
+}

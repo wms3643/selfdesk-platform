@@ -1,0 +1,293 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-01-08 10:00:00
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-12-05 10:00:00
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.push.service;
+
+import java.util.Optional;
+
+import org.springframework.stereotype.Service;
+import org.springframework.util.Assert;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.email_provider.EmailSendResult;
+import com.bytedesk.core.email_provider.EmailSendService;
+import com.bytedesk.core.ip.IpService;
+import com.bytedesk.core.ip.IpUtils;
+import com.bytedesk.core.push.PushEntity;
+import com.bytedesk.core.push.PushRequest;
+import com.bytedesk.core.push.PushResponse;
+import com.bytedesk.core.push.PushRestService;
+import com.bytedesk.core.push.PushStatusEnum;
+import com.bytedesk.core.push.strategy.AuthValidationStrategy;
+import com.bytedesk.core.push.strategy.AuthValidationStrategyFactory;
+import com.bytedesk.core.rbac.auth.AuthRequest;
+import com.bytedesk.core.rbac.auth.AuthTypeEnum;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserService;
+import com.bytedesk.core.sms_push.SmsPushSendService;
+import com.bytedesk.core.sms_push.SmsSendResult;
+import com.bytedesk.core.utils.Utils;
+import com.bytedesk.core.push.PushFilterService;
+
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.StringUtils;
+
+/**
+ * 验证码发送服务
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PushSendService {
+    
+    private final AuthValidationStrategyFactory strategyFactory;
+    private final EmailSendService emailSendService;
+    private final SmsPushSendService smsPushSendService;
+    private final BytedeskProperties bytedeskProperties;
+    private final IpService ipService;
+    private final PushFilterService pushFilterService;
+    private final PushRestService pushRestService;
+    private final UserService userService;
+
+    public PushSendResult sendCode(AuthRequest authRequest, HttpServletRequest request) {
+        
+        // 参数非空校验
+        Assert.notNull(authRequest, "AuthRequest cannot be null");
+        Assert.notNull(request, "HttpServletRequest cannot be null");
+        Assert.hasText(authRequest.getType(), "AuthRequest type cannot be null or empty");
+        Assert.hasText(authRequest.getReceiver(), "AuthRequest receiver cannot be null or empty");
+        Assert.hasText(authRequest.getPlatform(), "AuthRequest platform cannot be null or empty");
+
+        String ip = IpUtils.getClientIp(request);
+        String type = authRequest.getType();
+        String receiver = authRequest.getReceiver();
+        String platform = authRequest.getPlatform();
+        
+        // 验证IP频率限制
+        if (!pushFilterService.canSendCode(ip)) {
+            // log.info("验证码发送过于频繁，IP: {}", ip);
+            return PushSendResult.failure(PushSendResult.SendCodeErrorType.TOO_FREQUENT, I18Consts.I18N_CAPTCHA_SEND_TOO_FREQUENT);
+        }
+        
+        // 使用策略模式处理不同类型的验证逻辑
+        AuthValidationStrategy strategy = strategyFactory.getStrategy(type);
+        if (strategy != null) {
+            strategy.validateUserStatus(authRequest, receiver, platform);
+        }
+        
+        // 检查是否已发送验证码
+        if (pushRestService.existsByStatusAndTypeAndReceiver(PushStatusEnum.PENDING.name(), type, receiver)) {
+            return PushSendResult.failure(PushSendResult.SendCodeErrorType.ALREADY_SENT, I18Consts.I18N_CAPTCHA_ALREADY_SENT);
+        }
+
+        // 生成验证码
+        String code = generateCode(receiver);
+        
+        // 保存验证码记录(会在内部发送并保存结果)
+        PushSendResult sendResult = saveCodeRecord(authRequest, code, ip, request);
+        
+        // 仅在实际发送成功后才更新IP最后发送时间，失败时允许修复配置后立即重试
+        if (sendResult.isSuccess()) {
+            pushFilterService.updateIpLastSentTime(ip);
+        }
+
+        return sendResult;
+    }
+
+    private String generateCode(String receiver) {
+        if (bytedeskProperties.isInWhitelist(receiver) || isSuperAdminIdentifier(receiver)) {
+            return bytedeskProperties.getValidateCode();
+        }
+        return Utils.getRandomCode();
+    }
+
+    /**
+     * D3 固定验证码口径：超管判定以数据库 superUser=true 用户为权威（复用 getSuper() 的 admin 缓存，
+     * 无新增查库压力；UserService.changeMobile/changeEmail 已同步失效该缓存），
+     * 配置值 bytedesk.admin.mobile/email 仅作首次启动/异常场景兑底，
+     * 避免超管改手机号后配置残留旧号仍可获取固定验证码。
+     */
+    boolean isSuperAdminIdentifier(String receiver) {
+        if (!StringUtils.hasText(receiver)) {
+            return false;
+        }
+        if (bytedeskProperties.isAdminIdentifier(receiver)) {
+            return true;
+        }
+        return userService.getSuper()
+                .map(superUser -> matchesSuperIdentifier(superUser, receiver.trim()))
+                .orElse(false);
+    }
+
+    private boolean matchesSuperIdentifier(UserEntity superUser, String receiver) {
+        if (superUser == null) {
+            return false;
+        }
+        if (StringUtils.hasText(superUser.getMobile()) && receiver.equals(superUser.getMobile().trim())) {
+            return true;
+        }
+        return StringUtils.hasText(superUser.getEmail()) && receiver.equalsIgnoreCase(superUser.getEmail().trim());
+    }
+
+    private PushSendResult sendCodeByType(AuthRequest authRequest, String receiver, String country, 
+                                  String code, HttpServletRequest request) {
+        // P1 用途模型：透传 AuthTypeEnum 名称，发送侧优先使用该用途绑定的供应商/模板
+        String type = authRequest.getType();
+        if (authRequest.isEmail()) {
+            EmailSendResult emailResult = emailSendService.sendEmailWithResult(receiver, code, type, request);
+            return convertEmailResult(emailResult);
+        } else if (authRequest.isMobile()) {
+            SmsSendResult smsResult = smsPushSendService.sendSmsWithResult(receiver, country, code, type, request);
+            return convertSmsResult(smsResult);
+        }
+        return PushSendResult.failure(PushSendResult.SendCodeErrorType.SEND_FAILED, I18Consts.I18N_CAPTCHA_UNSUPPORTED_TYPE);
+    }
+    
+    /**
+     * 将EmailSendResult转换为PushSendResult
+     */
+    private PushSendResult convertEmailResult(EmailSendResult emailResult) {
+        if (emailResult.isSuccess()) {
+            return PushSendResult.success();
+        }
+        return PushSendResult.failure(PushSendResult.SendCodeErrorType.SEND_FAILED, emailResult.getErrorMessage());
+    }
+    
+    /**
+     * 将SmsPushSendResult转换为PushSendResult
+     */
+    private PushSendResult convertSmsResult(SmsSendResult smsResult) {
+        if (smsResult.isSuccess()) {
+            return PushSendResult.success();
+        }
+        return PushSendResult.failure(PushSendResult.SendCodeErrorType.SEND_FAILED, smsResult.getErrorMessage());
+    }
+
+    private PushSendResult saveCodeRecord(AuthRequest authRequest, String code, String ip, HttpServletRequest request) {
+        String ipLocation = ipService.getIpLocation(ip);
+        String country = authRequest.getCountry();
+        String receiver = authRequest.getReceiver();
+        
+        // 重新发送并获取结果
+        PushSendResult sendResult = sendCodeByType(authRequest, receiver, country, code, request);
+        
+        PushRequest pushRequest = new PushRequest();
+        // 复制必要的字段
+        pushRequest.setType(authRequest.getType());
+        pushRequest.setCountry(country);
+        pushRequest.setReceiver(receiver);
+        pushRequest.setPlatform(authRequest.getPlatform());
+        pushRequest.setSender(TypeConsts.TYPE_SYSTEM);
+        pushRequest.setContent(code);
+        pushRequest.setIp(ip);
+        pushRequest.setIpLocation(ipLocation);
+        pushRequest.setChannel(authRequest.getChannel());
+        pushRequest.setDeviceUid(authRequest.getDeviceUid());
+        // 保存发送结果
+        pushRequest.setSendSuccess(sendResult.isSuccess());
+        pushRequest.setSendMessage(sendResult.getErrorMessage());
+        // 发送失败时设置状态为ERROR
+        if (!sendResult.isSuccess()) {
+            pushRequest.setStatus(PushStatusEnum.ERROR.name());
+        }
+        // 
+        pushRestService.create(pushRequest);
+
+        return sendResult;
+    }
+
+    // =============== 重新发送功能 ===============
+
+    /**
+     * 重新发送推送记录
+     * @param request 包含uid的请求
+     * @return 更新后的推送响应
+     */
+    public PushResponse resend(PushRequest request) {
+        Assert.notNull(request, "PushRequest cannot be null");
+        Assert.hasText(request.getUid(), "PushRequest uid cannot be null or empty");
+
+        // 查找原记录
+        Optional<PushEntity> existingEntity = pushRestService.findByUid(request.getUid());
+        if (existingEntity.isEmpty()) {
+            throw new RuntimeException("Push entity not found with uid: " + request.getUid());
+        }
+
+        PushEntity push = existingEntity.get();
+        String receiver = push.getReceiver();
+        String content = push.getContent(); // 验证码
+        String country = push.getCountry();
+        String type = push.getType();
+
+        log.info("Resending push to receiver: {}, type: {}, content: {}", receiver, type, content);
+
+        // 根据类型重新发送
+        PushSendResult sendResult = resendByType(type, receiver, country, content);
+
+        // 更新记录状态
+        push.setSendSuccess(sendResult.isSuccess());
+        push.setSendMessage(sendResult.getErrorMessage());
+        
+        // 根据发送结果更新状态
+        if (sendResult.isSuccess()) {
+            push.setStatus(PushStatusEnum.PENDING.name());
+        } else {
+            push.setStatus(PushStatusEnum.ERROR.name());
+        }
+
+        // 保存更新
+        PushEntity savedPush = pushRestService.save(push);
+        
+        return pushRestService.convertToResponse(savedPush);
+    }
+
+    /**
+     * 根据类型重新发送（透传 type，P1 用途模型下重发同样使用该用途绑定的供应商/模板）
+     */
+    private PushSendResult resendByType(String type, String receiver, String country, String content) {
+        // 判断是邮箱还是手机号类型
+        if (isEmailType(type)) {
+            EmailSendResult emailResult = emailSendService.sendEmailWithResult(receiver, content, type, null);
+            return convertEmailResult(emailResult);
+        } else if (isMobileType(type)) {
+            SmsSendResult smsResult = smsPushSendService.sendSmsWithResult(receiver, country, content, type, null);
+            return convertSmsResult(smsResult);
+        }
+        return PushSendResult.failure(PushSendResult.SendCodeErrorType.SEND_FAILED, "不支持的推送类型");
+    }
+
+    /**
+     * 判断是否为邮箱类型
+     */
+    private boolean isEmailType(String type) {
+        return AuthTypeEnum.EMAIL_REGISTER.name().equals(type) ||
+               AuthTypeEnum.EMAIL_LOGIN.name().equals(type) ||
+               AuthTypeEnum.EMAIL_RESET.name().equals(type) ||
+               AuthTypeEnum.EMAIL_VERIFY.name().equals(type) ||
+               AuthTypeEnum.EMAIL_PASSWORD_RESET.name().equals(type);
+    }
+
+    /**
+     * 判断是否为手机号类型
+     */
+    private boolean isMobileType(String type) {
+        return AuthTypeEnum.MOBILE_REGISTER.name().equals(type) ||
+               AuthTypeEnum.MOBILE_LOGIN.name().equals(type) ||
+               AuthTypeEnum.MOBILE_RESET.name().equals(type) ||
+               AuthTypeEnum.MOBILE_VERIFY.name().equals(type) ||
+               AuthTypeEnum.MOBILE_PASSWORD_RESET.name().equals(type);
+    }
+}

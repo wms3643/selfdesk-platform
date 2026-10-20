@@ -1,0 +1,144 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:46
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2024-12-24 11:26:17
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.socket.mqtt.server;
+
+import java.net.BindException;
+
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.ResourceLeakDetector;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+
+import com.bytedesk.core.socket.mqtt.MqttProperties;
+import com.bytedesk.core.socket.mqtt.initializer.MqttWebSocketServerInitializer;
+import com.bytedesk.core.socket.mqtt.protocol.ProtocolProcess;
+import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+/**
+ * encrypt/security through nginx proxy
+ * 
+ * @author bytedesk.com on 2019-07-23
+ */
+@RequiredArgsConstructor
+@Slf4j
+@Component
+public class MqttWebSocketServer {
+
+    private final MqttProperties mqttProperties;
+
+    private final ProtocolProcess protocolProcess;
+
+    private Channel serverChannel;
+
+    private EventLoopGroup parentEventLoopGroup;
+
+    private EventLoopGroup childEventLoopGroup;
+
+    @PostConstruct
+    public void init() throws Exception {
+
+        if (!mqttProperties.getEnabled()) {
+            log.info("Mqtt websocket transport disabled!");
+            return;
+        } else {
+            log.info("Mqtt websocket transport enabled!");
+        }
+
+        ResourceLeakDetector
+                .setLevel(ResourceLeakDetector.Level.valueOf(mqttProperties.getLeakDetectorLevel().toUpperCase()));
+
+        parentEventLoopGroup = new MultiThreadIoEventLoopGroup(mqttProperties.getParentEventLoopGroupThreadCount(), NioIoHandler.newFactory());
+
+        childEventLoopGroup = new MultiThreadIoEventLoopGroup(mqttProperties.getChildEventLoopGroupThreadCount(), NioIoHandler.newFactory());
+
+        ServerBootstrap serverBootstrap = new ServerBootstrap();
+
+        serverBootstrap.group(parentEventLoopGroup, childEventLoopGroup)
+                //
+                .channel(NioServerSocketChannel.class)
+                // 服务端处理客户端连接请求是顺序处理的，所以同一时间只能处理一个客户端连接，多个客户端来的时候，
+                // 服务端将不能处理的客户端连接请求放在队列中等待处理，backlog参数指定了队列的大小
+                .option(ChannelOption.SO_BACKLOG, 1024)
+                // .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                // 当设置该选项以后，如果在两小时内没有数据的通信时，TCP会自动发送一个活动探测数据报文
+                .childOption(ChannelOption.SO_KEEPALIVE, true)
+                // Nagle算法是将小的数据包组装为更大的帧然后进行发送，而不是输入一次发送一次,因此在数据包不足的时候会等待其他数据的到了，
+                // 组装成大的数据包进行发送，虽然该方式有效提高网络的有效
+                // 参数的作用就是禁止使用Nagle算法，使用于小数据即时传输
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                // 打印log，TODO: 生产环境删除
+                // .handler(new LoggingHandler(LogLevel.WARN))
+                //
+                .childHandler(
+                        new MqttWebSocketServerInitializer(null, protocolProcess, mqttProperties.getMaxPayloadSize()));
+
+        try {
+            serverChannel = serverBootstrap.bind(mqttProperties.getHost(), mqttProperties.getWebsocketPort()).sync()
+                    .channel();
+        } catch (Exception exception) {
+            if (isAddressInUse(exception)) {
+                log.error(
+                        "Mqtt websocket transport bind failed, address already in use {}:{}; disabling mqtt websocket transport for this startup.",
+                        mqttProperties.getHost(), mqttProperties.getWebsocketPort());
+                shutdownEventLoops();
+                return;
+            }
+            throw exception;
+        }
+
+        log.debug("Mqtt websocket transport started! {}:{}", mqttProperties.getHost(),
+                mqttProperties.getWebsocketPort());
+    }
+
+    @PreDestroy
+    public void shutdown() throws InterruptedException {
+
+        if (serverChannel != null) {
+            try {
+                serverChannel.close().sync();
+            } finally {
+                shutdownEventLoops();
+            }
+        }
+    }
+
+    private boolean isAddressInUse(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof BindException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void shutdownEventLoops() {
+        if (childEventLoopGroup != null) {
+            childEventLoopGroup.shutdownGracefully();
+        }
+        if (parentEventLoopGroup != null) {
+            parentEventLoopGroup.shutdownGracefully();
+        }
+    }
+
+}

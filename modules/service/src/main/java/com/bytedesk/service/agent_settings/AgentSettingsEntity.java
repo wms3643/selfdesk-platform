@@ -1,0 +1,216 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-10-23
+ * @Description: Agent configuration settings for reusable agent settings
+ */
+package com.bytedesk.service.agent_settings;
+
+import com.bytedesk.kbase.settings.BaseSettingsEntity;
+import com.bytedesk.kbase.settings_ratedown.RatedownSettingsEntity;
+import com.bytedesk.service.agent_quickreply.AgentQuickReplyButton;
+import com.bytedesk.service.agent_quickreply.AgentQuickReplyButtonListConverter;
+import com.bytedesk.service.agent_rightpanel.AgentRightPanelTab;
+import com.bytedesk.service.agent_rightpanel.AgentRightPanelTabListConverter;
+import com.bytedesk.service.agent_status.settings.AgentStatusSettingEntity;
+import com.bytedesk.service.message_leave_settings.MessageLeaveSettingsEntity;
+import com.bytedesk.service.queue_settings.QueueSettingsEntity;
+import com.bytedesk.service.worktime_settings.WorktimeSettingEntity;
+import com.bytedesk.webrtc.webrtc_settings.WebrtcSettingsEntity;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import com.bytedesk.core.constant.TypeConsts;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.Index;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+import lombok.experimental.SuperBuilder;
+
+/**
+ * Agent configuration settings for reusable settings
+ * 
+ * Purpose:
+ * - Store reusable agent configurations
+ * - Enable sharing common settings across multiple agents
+ * - Simplify agent configuration management
+ * 
+ * Usage:
+ * - Create settings for different agent roles (e.g., "Junior Support", "Senior Support", "VIP Agent")
+ * - Assign settings to agents via AgentEntity.settings reference
+ * - Multiple agents can share the same settings
+ * 
+ * Common fields (inherited from BaseSettingsEntity):
+ * - name, description, isDefault, enabled
+ * - serviceSettings, inviteSettings, intentionSettings
+ * 
+ * Agent-specific fields:
+ * - messageLeaveSettings, queueSettings, rateDownSettings
+ * 
+ * Database Table: bytedesk_service_agent_settings
+ */
+@Entity
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = true)
+@AllArgsConstructor
+@NoArgsConstructor
+@Table(
+    name = "bytedesk_service_agent_settings",
+    indexes = {
+        @Index(name = "idx_agent_settings_org", columnList = "org_uid"),
+        @Index(name = "idx_agent_settings_default", columnList = "is_default")
+    }
+)
+public class AgentSettingsEntity extends BaseSettingsEntity {
+
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * Maximum concurrent threads the agent can handle
+     * Moved from AgentEntity to centralize configuration
+     */
+    @lombok.Builder.Default
+    private Integer maxThreadCount = 10;
+
+    /**
+     * Whether timeout reminder is enabled for agent
+     */
+    @lombok.Builder.Default
+    private Boolean timeoutRemindEnabled = false;
+
+    /**
+     * Timeout reminder time in minutes
+     */
+    @lombok.Builder.Default
+    private Integer timeoutRemindTime = 5;
+
+    /**
+     * Timeout reminder tip message
+     */
+    @lombok.Builder.Default
+    private String timeoutRemindTip = com.bytedesk.core.constant.I18Consts.I18N_AGENT_TIMEOUT_TIP;
+
+    /**
+     * Whether agent can manually close thread/session
+     * Default: true
+     */
+    @lombok.Builder.Default
+    private Boolean allowAgentCloseThread = true;
+
+    /**
+     * Desktop right panel dynamic tabs (published)
+     */
+    @lombok.Builder.Default
+    @Convert(converter = AgentRightPanelTabListConverter.class)
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private List<AgentRightPanelTab> rightPanelTabs = new ArrayList<>();
+
+    /**
+     * Desktop right panel dynamic tabs (draft)
+     */
+    @lombok.Builder.Default
+    @Convert(converter = AgentRightPanelTabListConverter.class)
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private List<AgentRightPanelTab> draftRightPanelTabs = new ArrayList<>();
+
+    /**
+     * Desktop quick reply buttons (published)
+     */
+    @lombok.Builder.Default
+    @Convert(converter = AgentQuickReplyButtonListConverter.class)
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private List<AgentQuickReplyButton> quickReplies = new ArrayList<>();
+
+    /**
+     * Desktop quick reply buttons (draft)
+     */
+    @lombok.Builder.Default
+    @Convert(converter = AgentQuickReplyButtonListConverter.class)
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private List<AgentQuickReplyButton> draftQuickReplies = new ArrayList<>();
+
+    /**
+     * Message leave settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private MessageLeaveSettingsEntity messageLeaveSettings;
+
+    /**
+     * Draft Message leave settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private MessageLeaveSettingsEntity draftMessageLeaveSettings;
+
+    /**
+     * Worktime settings reference (shared template)
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private WorktimeSettingEntity worktimeSettings;
+
+    /**
+     * Draft worktime settings reference
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private WorktimeSettingEntity draftWorktimeSettings;
+
+    /**
+     * Queue settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { jakarta.persistence.CascadeType.PERSIST, jakarta.persistence.CascadeType.MERGE, jakarta.persistence.CascadeType.REMOVE })
+    private QueueSettingsEntity queueSettings;
+
+    /**
+     * Draft Queue settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { jakarta.persistence.CascadeType.PERSIST, jakarta.persistence.CascadeType.MERGE, jakarta.persistence.CascadeType.REMOVE })
+    private QueueSettingsEntity draftQueueSettings;
+
+    /**
+     * Rating down settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private RatedownSettingsEntity rateDownSettings;
+
+    /**
+     * Draft Rating down settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private RatedownSettingsEntity draftRateDownSettings;
+
+    /**
+     * Agent status settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private AgentStatusSettingEntity agentStatusSettings;
+
+    /**
+     * Draft agent status settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private AgentStatusSettingEntity draftAgentStatusSettings;
+
+    /**
+     * WebRTC settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private WebrtcSettingsEntity webrtcSettings;
+
+    /**
+     * Draft WebRTC settings
+     */
+    @ManyToOne(fetch = FetchType.LAZY, optional = true, cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REMOVE })
+    private WebrtcSettingsEntity draftWebrtcSettings;
+
+}

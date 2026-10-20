@@ -1,0 +1,501 @@
+package com.bytedesk.call.config;
+
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.call.call_settings.CallSettingsRepository;
+import com.bytedesk.call.esl.EslEventNames;
+import com.bytedesk.call.esl.client.inbound.IEslEventListener;
+import com.bytedesk.call.esl.client.internal.Context;
+import com.bytedesk.call.esl.client.transport.event.EslEvent;
+import com.bytedesk.call.esl_event.EslEventIngestService;
+import com.bytedesk.call.call_ip_blacklist.CallIpBlacklistService;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * Call事件监听器
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+@ConditionalOnProperty(prefix = "bytedesk.call.freeswitch", name = "enabled", havingValue = "true", matchIfMissing = false)
+public class CallEventListener implements IEslEventListener {
+
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final EslEventIngestService eslEventIngestService;
+    private final CallIpBlacklistService callIpBlacklistService;
+    private final CallSettingsRepository callSettingsRepository;
+
+    // 实现 IEslEventListener 的回调
+    @Override
+    public void onEslEvent(Context ctx, EslEvent eslEvent) {
+        String eventName = eslEvent.getEventName();
+        if (eventName == null || eventName.isBlank()) {
+            log.debug("收到空事件名事件: headers={}", eslEvent.getEventHeaders());
+            return;
+        }
+
+        eslEventIngestService.ingest(eslEvent);
+        publishSwitchEvent(eslEvent);
+        // log.info("收到Call事件: {}", eventName); // HEARTBEAT/RE_SCHEDULE
+
+        switch (eventName) {
+            case EslEventNames.CHANNEL_CREATE:
+                handleChannelCreate(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_ANSWER:
+                handleChannelAnswer(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_HANGUP:
+                handleChannelHangup(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_HANGUP_COMPLETE:
+                handleChannelHangupComplete(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_DESTROY:
+                handleChannelDestroy(eslEvent);
+                break;
+            case EslEventNames.DTMF:
+                handleDtmf(eslEvent);
+                break;
+            case EslEventNames.CUSTOM:
+                handleCustomEvent(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_EXECUTE:
+                handleChannelExecute(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_EXECUTE_COMPLETE:
+                handleChannelExecuteComplete(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_STATE:
+                handleChannelState(eslEvent);
+                break;
+            case EslEventNames.CHANNEL_CALLSTATE:
+                handleChannelCallState(eslEvent);
+                break;
+            case EslEventNames.PRESENCE_IN:
+                handlePresenceIn(eslEvent);
+                break;
+            case EslEventNames.API:
+                handleApiEvent(eslEvent);
+                break;
+            default:
+                // log.info("handle default event: {}", eslEvent.getEventHeaders());
+                break;
+        }
+    }
+
+    /**
+     * 处理通道创建事件
+     */
+    private void handleChannelCreate(EslEvent eslEvent) {
+        String callerId = eslEvent.getEventHeaders().get("Caller-Caller-ID-Number");
+        String destination = eslEvent.getEventHeaders().get("Caller-Destination-Number");
+        String uuid = eslEvent.getEventHeaders().get("Unique-ID");
+
+        log.info("通道创建: 主叫 {} 被叫 {} UUID {}", callerId, destination, uuid);
+
+        // 创建CDR记录
+        try {
+            // CallCdrEntity cdr = new CallCdrEntity();
+            // cdr.setUid(uuid);
+            // cdr.setCallerIdNumber(callerId);
+            // cdr.setDestinationNumber(destination);
+            // cdr.setStartStamp(BdDateUtils.now());
+            // cdr.setDirection("outbound"); // 默认为outbound，可根据实际情况调整
+            // cdr.setHangupCause(""); // 初始为空
+
+            // cdrService.createCdr(cdr);
+            log.debug("已创建CDR记录: UUID {}", uuid);
+        } catch (Exception e) {
+            log.error("创建CDR记录失败: UUID {} - {}", uuid, e.getMessage(), e);
+        }
+
+        // 更新用户在线状态
+        updateUserOnlineStatus(callerId, true);
+        updateUserOnlineStatus(destination, true);
+        log.debug("已更新用户在线状态: 主叫 {} 被叫 {}", callerId, destination);
+
+        // 发布通话开始事件
+        // eventPublisher.publishEvent(new CallCallStartEvent(this, uuid, callerId, destination));
+    }
+
+    /**
+     * 处理通道应答事件
+     */
+    private void handleChannelAnswer(EslEvent eslEvent) {
+        String uuid = eslEvent.getEventHeaders().get("Unique-ID");
+
+        log.info("通道应答: UUID {}", uuid);
+
+        // 更新CDR记录 - 设置应答时间
+        try {
+            // cdrService.updateCdrAnswerTime(uuid, BdDateUtils.now());
+            log.debug("已更新CDR应答时间: UUID {}", uuid);
+        } catch (Exception e) {
+            log.error("更新CDR应答时间失败: UUID {} - {}", uuid, e.getMessage(), e);
+        }
+
+        // 发布通话应答事件
+        // eventPublisher.publishEvent(new CallCallAnsweredEvent(this, uuid));
+    }
+
+    /**
+     * 处理通道挂断事件
+     */
+    private void handleChannelHangup(EslEvent eslEvent) {
+        String uuid = eslEvent.getEventHeaders().get("Unique-ID");
+        String hangupCause = eslEvent.getEventHeaders().get("Hangup-Cause");
+
+        // log.info("通道挂断: UUID {} 原因 {}", uuid, hangupCause);
+
+        // 更新CDR记录 - 设置结束时间和挂断原因
+        try {
+            // cdrService.updateCdrEndTime(uuid, BdDateUtils.now(), hangupCause);
+            log.debug("已更新CDR结束时间: UUID {} 原因 {}", uuid, hangupCause);
+        } catch (Exception e) {
+            log.error("更新CDR结束时间失败: UUID {} - {}", uuid, e.getMessage(), e);
+        }
+
+        // 发布通话挂断事件
+        // eventPublisher.publishEvent(new CallCallHangupEvent(this, uuid, hangupCause));
+    }
+
+    /**
+     * 处理通道挂断完成事件
+     */
+    private void handleChannelHangupComplete(EslEvent eslEvent) {
+        String uuid = eslEvent.getEventHeaders().get("Unique-ID");
+        // String hangupCause = eslEvent.getEventHeaders().getOrDefault("hangup_cause",
+        //         eslEvent.getEventHeaders().get("Hangup-Cause"));
+        // String duration = eslEvent.getEventHeaders().getOrDefault("duration", "0");
+        // String billsec = eslEvent.getEventHeaders().getOrDefault("billsec", "0");
+
+        // log.info("通道挂断完成: UUID {} 原因 {} 通话时长(s) {} 计费时长(s) {}", uuid, hangupCause, duration, billsec);
+
+        try {
+            // cdrService.finalizeCdr(uuid, hangupCause, Integer.parseInt(duration), Integer.parseInt(billsec));
+            log.debug("已最终完成CDR: UUID {}", uuid);
+        } catch (Exception e) {
+            log.error("最终完成CDR失败: UUID {} - {}", uuid, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 处理DTMF按键事件
+     */
+    private void handleDtmf(EslEvent eslEvent) {
+        String uuid = eslEvent.getEventHeaders().get("Unique-ID");
+        String digit = eslEvent.getEventHeaders().get("DTMF-Digit");
+
+        log.info("DTMF按键: UUID {} 键值 {}", uuid, digit);
+
+        // 调用通话服务处理
+        // callService.handleDtmf(uuid, digit);
+        // 发布DTMF事件
+        // eventPublisher.publishEvent(new CallDtmfEvent(this, uuid, digit));
+    }
+
+    /**
+     * 处理自定义事件
+     */
+    private void handleCustomEvent(EslEvent eslEvent) {
+        Map<String, String> headers = eslEvent.getEventHeaders() == null ? Collections.emptyMap() : eslEvent.getEventHeaders();
+        String eventSubclass = eslEvent.getEventSubclass();
+
+        // sofia::register 是高频注册心跳类事件，默认降到 DEBUG，避免刷屏。
+        if ("sofia::register".equals(eventSubclass)) {
+            // log.debug("自定义事件(注册): subclass={} fromUser={} toUser={} status={} contact={}",
+            //         eventSubclass,
+            //         headers.get("from-user"),
+            //         headers.get("to-user"),
+            //         headers.get("status"),
+            //         headers.get("contact"));
+            return;
+        }
+
+        if ("sofia::wrong_call_state".equals(eventSubclass)) {
+            String sourceIp = firstNonBlank(headers,
+                    "Caller-Network-Addr",
+                    "network_addr",
+                    "network_ip",
+                    "variable_network_addr",
+                    "variable_sip_network_ip",
+                    "sip_network_ip",
+                    "variable_sip_received_ip",
+                    "sip_received_ip",
+                    "variable_sip_via_host",
+                    "sip_via_host");
+            String sourcePort = firstNonBlank(headers,
+                    "Caller-Network-Port",
+                    "network_port",
+                    "variable_sip_received_port",
+                    "sip_received_port");
+                String callerNumber = firstNonBlank(headers,
+                    "from-user",
+                    "from_user",
+                    "Caller-Caller-ID-Number");
+                String orgUid = resolveOrgUid(headers, callerNumber);
+                if (StringUtils.hasText(sourceIp)) {
+                    // 同一扫描器会持续探测已拉黑 IP（每条 INVITE/CANCEL 都产生一条 wrong_call_state），
+                    // 重复事件降级为 DEBUG，避免线上日志刷屏；仅首次拉黑/拉黑失败保留 WARN，便于监控新增攻击源。
+                    if (callIpBlacklistService.isBlacklisted(orgUid, sourceIp)) {
+                        log.debug("自定义事件(异常状态)重复扫描(已拉黑): subclass={} fromUser={} sourceIp={} sourcePort={} orgUid={} function={} file={} line={}",
+                                eventSubclass,
+                                callerNumber,
+                                sourceIp,
+                                sourcePort,
+                                orgUid,
+                                headers.get("Event-Calling-Function"),
+                                headers.get("Event-Calling-File"),
+                                headers.get("Event-Calling-Line-Number"));
+                        return;
+                    }
+                    try {
+                        var blacklistEntity = callIpBlacklistService.blacklistSourceIp(
+                            orgUid,
+                            sourceIp,
+                            eslEvent.getEventName(),
+                            callerNumber,
+                            null,
+                            "Auto-blocked from CUSTOM sofia::wrong_call_state");
+                        log.warn("自定义事件(异常状态): subclass={} fromUser={} sourceIp={} sourcePort={} orgUid={} blacklistUid={} function={} file={} line={}",
+                            eventSubclass,
+                            callerNumber,
+                            sourceIp,
+                            sourcePort,
+                            blacklistEntity.getOrgUid(),
+                            blacklistEntity.getUid(),
+                            headers.get("Event-Calling-Function"),
+                            headers.get("Event-Calling-File"),
+                            headers.get("Event-Calling-Line-Number"));
+                    } catch (Exception ex) {
+                        log.warn("自定义事件(异常状态)自动拉黑失败: subclass={} fromUser={} sourceIp={} reason={}",
+                            eventSubclass,
+                            callerNumber,
+                            sourceIp,
+                            ex.getMessage());
+                    }
+                } else {
+                log.warn("自定义事件(异常状态): subclass={} fromUser={} sourceIp=<empty> sourcePort={} function={} file={} line={}",
+                    eventSubclass,
+                    callerNumber,
+                    sourcePort,
+                    headers.get("Event-Calling-Function"),
+                    headers.get("Event-Calling-File"),
+                    headers.get("Event-Calling-Line-Number"));
+                }
+            log.debug("自定义事件(异常状态)详情: headers={}", headers);
+            return;
+        }
+
+        // log.info("自定义事件: subclass={} headers={}", eventSubclass, headers);
+    }
+
+    private String firstNonBlank(Map<String, String> headers, String... keys) {
+        if (headers == null) {
+            return null;
+        }
+        for (String key : keys) {
+            String value = headers.get(key);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String resolveOrgUid(Map<String, String> headers, String callerNumber) {
+        if (!StringUtils.hasText(callerNumber)) {
+            return null;
+        }
+
+        String domain = firstNonBlank(headers,
+                "domain",
+                "Domain",
+                "domain_name",
+                "variable_domain_name",
+                "sip_from_host");
+        if (!StringUtils.hasText(domain)) {
+            domain = CallConstants.DIRECTORY_DOMAIN_DEFAULT;
+        }
+
+        Set<String> candidates = new LinkedHashSet<>();
+        String normalizedCallerNumber = callerNumber.trim();
+        candidates.add(normalizedCallerNumber);
+        candidates.add(normalizedCallerNumber + "@" + domain.trim());
+        candidates.add("sip:" + normalizedCallerNumber + "@" + domain.trim());
+        candidates.add("sip:" + normalizedCallerNumber + "@" + CallConstants.DIRECTORY_DOMAIN_DEFAULT);
+
+        return callSettingsRepository.findAllByTargetInAndEnabledTrueAndDeletedFalse(candidates).stream()
+                .map(e -> e.getOrgUid())
+                .filter(StringUtils::hasText)
+                .map(s -> s.trim())
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * 处理应用执行事件
+     */
+    private void handleChannelExecute(EslEvent eslEvent) {
+        var headers = eslEvent.getEventHeaders();
+        String uuid = headers.get("Unique-ID");
+        String application = headers.get("Application");
+        String appData = headers.get("Application-Data");
+        String currentApp = headers.get("variable_current_application");
+        String currentAppData = headers.get("variable_current_application_data");
+
+        log.info("应用执行: UUID {} App {} Data {} CurrApp {} CurrData {}", uuid, application, appData, currentApp,
+                currentAppData);
+
+        // 典型关键信息示例：录音文件、转接、拨号等
+        String recordFile = headers.get("variable_record_filename");
+        String executeOnAnswer = headers.get("variable_execute_on_answer");
+        if (recordFile != null || executeOnAnswer != null) {
+            log.debug("执行参数: record={} execute_on_answer={}", recordFile, executeOnAnswer);
+        }
+    }
+
+    /**
+     * 处理应用执行完成事件
+     */
+    private void handleChannelExecuteComplete(EslEvent eslEvent) {
+        var headers = eslEvent.getEventHeaders();
+        String uuid = headers.get("Unique-ID");
+        String application = headers.get("Application");
+        String response = headers.get("Application-Response");
+        String recordFile = headers.get("variable_record_filename");
+
+        log.info("应用执行完成: UUID {} App {} Response {} Record {}", uuid, application, response, recordFile);
+    }
+
+    /**
+     * 处理通道状态事件
+     */
+    private void handleChannelState(EslEvent eslEvent) {
+        // var headers = eslEvent.getEventHeaders();
+        // String uuid = headers.get("Unique-ID");
+        // String state = headers.get("Channel-State");
+        // String callState = headers.get("Channel-Call-State");
+        // String answerState = headers.get("Answer-State");
+
+        // log.info("通道状态: UUID {} State {} CallState {} AnswerState {}", uuid, state, callState, answerState);
+    }
+
+    /**
+     * 处理通话状态变更事件
+     */
+    private void handleChannelCallState(EslEvent eslEvent) {
+        // var headers = eslEvent.getEventHeaders();
+        // String uuid = headers.get("Unique-ID");
+        // String callState = headers.get("Channel-Call-State");
+        // String original = headers.get("Original-Channel-Call-State");
+        // String hangupCause = headers.get("Hangup-Cause");
+
+        // log.info("通话状态: UUID {} CallState {} -> {} Cause {}", uuid, original, callState, hangupCause);
+    }
+
+    /**
+     * 处理Presence事件（座席/用户振铃、空闲等）
+     */
+    private void handlePresenceIn(EslEvent eslEvent) {
+        var headers = eslEvent.getEventHeaders();
+        String presenceId = headers.get("Channel-Presence-ID");
+        String direction = headers.getOrDefault("presence-call-direction", headers.get("Presence-Call-Direction"));
+        String infoState = headers.get("presence-call-info-state");
+        String status = headers.get("status");
+
+        // 避免打印大量 null 字段的 INFO 日志
+        if (presenceId == null && direction == null && infoState == null) {
+            log.debug("Presence: status={}", status);
+        } else {
+            log.info("Presence: {} direction={} infoState={} status={}", presenceId, direction, infoState, status);
+        }
+
+        // 可在此更新坐席/用户实时状态
+        // presenceService.update(presenceId, direction, infoState, status);
+    }
+
+    /**
+     * 处理 API 事件（如 strftime 等调用）
+     */
+    private void handleApiEvent(EslEvent eslEvent) {
+        var headers = eslEvent.getEventHeaders();
+        String cmd = headers.get("API-Command");
+        String arg = headers.get("API-Command-Argument");
+        String uuid = headers.get("Unique-ID");
+        String eventSequence = headers.get("Event-Sequence");
+        String source = headers.get("Event-Calling-Function");
+
+        // status 是高频轮询命令，默认降到 DEBUG。
+        if ("status".equalsIgnoreCase(cmd)) {
+            log.debug("API事件(状态): command={} arg={}", cmd, arg);
+            return;
+        }
+
+        log.info("API事件: command={} arg={} uuid={} seq={} source={}", cmd, arg, uuid, eventSequence, source);
+        log.debug("API事件详情: headers={}", headers);
+    }
+
+    /**
+     * 处理通道销毁事件
+     */
+    private void handleChannelDestroy(EslEvent eslEvent) {
+        var headers = eslEvent.getEventHeaders();
+        String uuid = headers.get("Unique-ID");
+        // String hangupCause = headers.getOrDefault("Hangup-Cause", headers.get("variable_hangup_cause"));
+        // log.info("通道销毁: UUID {} 原因 {}", uuid, hangupCause);
+
+        try {
+            // cdrService.closeSession(uuid);
+            log.debug("会话资源已清理: UUID {}", uuid);
+        } catch (Exception e) {
+            log.error("清理会话资源失败: UUID {} - {}", uuid, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 更新用户在线状态
+     */
+    private void updateUserOnlineStatus(String username, boolean online) {
+        log.debug("更新用户在线状态: {} -> {}", username, online);
+
+        try {
+            // Optional<CallNumberEntity> userOptional =
+            // userService.findByUsername(username);
+            // if (userOptional.isPresent()) {
+            // if (online) {
+            // userService.updateLastRegistration(username, BdDateUtils.now());
+            // }
+            // log.debug("已更新用户在线状态: {} -> {}", username, online);
+            // }
+        } catch (Exception e) {
+            log.error("更新用户在线状态失败: {} - {}", username, e.getMessage(), e);
+        }
+    }
+
+    private void publishSwitchEvent(EslEvent eslEvent) {
+        try {
+            CallSwitchEvent event = new CallSwitchEvent(
+                    eslEvent.getEventName(),
+                    eslEvent.getEventSubclass(),
+                    eslEvent.getEventHeaders(),
+                    eslEvent.getEventBodyLines()
+            );
+            applicationEventPublisher.publishEvent(event);
+        } catch (Exception e) {
+            log.warn("发布CallSwitchEvent失败: {}", e.getMessage(), e);
+        }
+    }
+
+}

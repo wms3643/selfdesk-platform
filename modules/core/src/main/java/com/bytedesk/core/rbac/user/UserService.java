@@ -1,0 +1,1301 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-18 09:25:50
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.user;
+
+import java.util.Optional;
+import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.List;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.config.BytedeskEventPublisher;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.AvatarConsts;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.enums.PlatformEnum;
+import com.bytedesk.core.exception.BusinessException;
+import com.bytedesk.core.exception.EmailExistsException;
+import com.bytedesk.core.exception.MobileExistsException;
+import com.bytedesk.core.exception.OrganizationI18nExceptions;
+import com.bytedesk.core.exception.UsernameExistsException;
+import com.bytedesk.core.member.MemberEntity;
+import com.bytedesk.core.member.MemberRepository;
+import com.bytedesk.core.member.MemberRequest;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.organization.OrganizationEntity;
+import com.bytedesk.core.rbac.organization.OrganizationRepository;
+import com.bytedesk.core.rbac.role.RoleConsts;
+import com.bytedesk.core.rbac.role.RoleEntity;
+import com.bytedesk.core.rbac.role.RoleRestService;
+import com.bytedesk.core.rbac.token.TokenRestService;
+import com.bytedesk.core.rbac.user.UserEntity.RegisterSource;
+import com.bytedesk.core.rbac.user.event.UserLogoutEvent;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.utils.BdDateUtils;
+import com.bytedesk.core.utils.CountryCodeUtils;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import org.modelmapper.ModelMapper;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class UserService {
+
+    // ROLE_USER is enforced automatically for every user and should not participate
+    // in restricted-role diff checks, otherwise fresh members can fail creation
+    // when the request is normalized to include it.
+    private static final Set<String> RESTRICTED_ROLE_UIDS = Set.of(
+            BytedeskConsts.DEFAULT_ROLE_ADMIN_UID,
+            BytedeskConsts.DEFAULT_ROLE_SUPER_UID);
+
+    private final UserRepository userRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final RoleRestService roleRestService;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    private final BCryptPasswordEncoder passwordEncoder;
+
+    private final UidUtils uidUtils;
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    private final OrganizationRepository organizationRepository;
+
+    private final BytedeskEventPublisher bytedeskEventPublisher;
+
+    private final AuthService authService;
+
+    private final TokenRestService tokenRestService;
+
+    private final MemberRepository memberRepository;
+
+    @Transactional
+    @Caching(evict = {
+            @CacheEvict(value = "user:exists", key = "#request.username + '-' + #request.platform", condition = "#request.username != null"),
+            @CacheEvict(value = "user:exists", key = "#request.mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#request.country)) + '-' + #request.platform", condition = "#request.mobile != null"),
+            @CacheEvict(value = "user:exists", key = "#request.email + '-' + #request.platform", condition = "#request.email != null"),
+    })
+    public UserResponse register(UserRequest request) {
+
+        // platform 不能为空；管理员后台创建用户时可能未传该字段，默认使用 BYTEDESK
+        String platform = request.getPlatform();
+        if (!StringUtils.hasText(platform)) {
+            platform = PlatformEnum.BYTEDESK.name();
+            request.setPlatform(platform);
+        }
+
+        if (!StringUtils.hasText(request.getEmail())
+                && !StringUtils.hasText(request.getMobile())) {
+            throw new RuntimeException(I18Consts.I18N_EMAIL_OR_MOBILE_REQUIRED);
+        }
+
+        String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+        request.setCountry(normalizedCountry);
+
+        // 保护超级管理员账号：仅在超级管理员已存在时进行验证
+        // 首次安装时，超级管理员尚未创建，应跳过此验证
+        if (existsBySuperUser()) {
+            validateNotUsingSuperCredentials(request.getEmail(), request.getMobile(), null);
+        }
+
+        if (StringUtils.hasText(request.getEmail())
+                && existsByEmailAndPlatform(request.getEmail(), platform)) {
+            throw new EmailExistsException(
+                    I18Consts.withArgs(I18Consts.I18N_EMAIL_ALREADY_EXISTS, request.getEmail()));
+        }
+
+        if (StringUtils.hasText(request.getMobile())
+                && existsByMobileAndPlatform(request.getMobile(), normalizedCountry, platform)) {
+            throw new MobileExistsException(
+                    I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, request.getMobile()));
+        }
+        //
+        UserEntity user = modelMapper.map(request, UserEntity.class);
+        user.setUid(uidUtils.getUid());
+        user.setPlatform(platform);
+        // 设置注册来源：优先取请求值，否则根据提供的信息进行推断
+        String rs = request.getRegisterSource();
+        if (!StringUtils.hasText(rs)) {
+            if (StringUtils.hasText(request.getEmail())) {
+                rs = UserEntity.RegisterSource.EMAIL.name();
+            } else if (StringUtils.hasText(request.getMobile())) {
+                rs = UserEntity.RegisterSource.MOBILE.name();
+            } else if (StringUtils.hasText(request.getUsername())) {
+                rs = UserEntity.RegisterSource.USERNAME.name();
+            } else {
+                rs = UserEntity.RegisterSource.UNKNOWN.name();
+            }
+        }
+        user.setRegisterSource(rs);
+        //
+        if (StringUtils.hasText(request.getNickname())) {
+            user.setNickname(request.getNickname());
+        } else if (StringUtils.hasText(request.getMobile())) {
+            user.setNickname("User" + request.getMobile().substring(7));
+        } else {
+            user.setNickname(createNickname());
+        }
+        //
+        if (StringUtils.hasText(request.getAvatar())) {
+            user.setAvatar(request.getAvatar());
+        } else {
+            user.setAvatar(AvatarConsts.getDefaultAvatarUrl());
+        }
+        //
+        if (StringUtils.hasText(request.getPassword())) {
+            String encodedPassword = passwordEncoder.encode(request.getPassword());
+            user.setPassword(encodedPassword);
+            // 设置密码修改时间为当前时间
+            user.setPasswordModifiedAt(BdDateUtils.now());
+        }
+        // 只有经过验证的邮箱，才真正执行注册
+        if (StringUtils.hasText(request.getEmail())) {
+            // 如果username为空，则使用email作为username
+            if (!StringUtils.hasText(request.getUsername())) {
+                user.setUsername(request.getEmail());
+            } else {
+                user.setUsername(request.getUsername());
+            }
+            user.setNum(request.getEmail());
+            // 默认注册时，仅验证手机号，无需验证邮箱
+            if (request.getEmailVerified() != null) {
+                user.setEmailVerified(request.getEmailVerified());
+            } else {
+                user.setEmailVerified(false);
+            }
+        }
+        // 只有经过验证的手机号，才真正执行注册
+        if (StringUtils.hasText(request.getMobile())) {
+            if (!StringUtils.hasText(request.getUsername())
+                    && !StringUtils.hasText(request.getEmail())) {
+                user.setUsername(CountryCodeUtils.buildMobileUsername(normalizedCountry, request.getMobile()));
+            } else {
+                user.setUsername(request.getUsername());
+            }
+            // 如果有手机号，则使用手机号作为num
+            user.setNum(request.getMobile());
+            if (request.getMobileVerified() != null) {
+                user.setMobileVerified(request.getMobileVerified());
+            } else {
+                user.setMobileVerified(true);
+            }
+        }
+        user.setEnabled(true);
+        // 设置密码修改时间为账号创建时间（当前时间）
+        user.setPasswordModifiedAt(BdDateUtils.now());
+        //
+        user = save(user);
+        user = addRoleUser(user);
+        return UserConvertUtils.convertToUserResponse(user);
+    }
+
+    @Transactional
+    @CacheEvict(value = "admin", condition = "#request.mobile != null or #request.email != null")
+    public UserResponse update(UserRequest request) {
+        UserEntity currentUser = authService.getUser();
+        Optional<UserEntity> userOptional = findByUid(currentUser.getUid());
+        if (userOptional.isPresent()) {
+            UserEntity user = userOptional.get();
+            boolean contactsChanged = false;
+
+            if (StringUtils.hasText(request.getUsername())) {
+                // 如果新用户名跟旧用户名不同，需要首先判断新用户名是否已经存在，如果存在则抛出异常
+                if (!request.getUsername().equals(user.getUsername())) {
+                    if (existsByUsernameAndPlatform(request.getUsername(),
+                            request.getPlatform())) {
+                        throw new UsernameExistsException(
+                                I18Consts.withArgs(I18Consts.I18N_USERNAME_ALREADY_EXISTS, request.getUsername()));
+                    }
+                }
+                user.setUsername(request.getUsername());
+            }
+
+            if (StringUtils.hasText(request.getNickname())) {
+                user.setNickname(request.getNickname());
+            }
+
+            if (StringUtils.hasText(request.getAvatar())) {
+                user.setAvatar(request.getAvatar());
+            }
+
+            if (StringUtils.hasText(request.getEmail())) {
+                // 如果新邮箱跟旧邮箱不同，需要首先判断新邮箱是否已经存在，如果存在则抛出异常
+                if (!request.getEmail().equals(user.getEmail())) {
+                    if (existsByEmailAndPlatform(request.getEmail(),
+                            request.getPlatform())) {
+                        throw new EmailExistsException(
+                                I18Consts.withArgs(I18Consts.I18N_EMAIL_ALREADY_EXISTS, request.getEmail()));
+                    }
+                }
+                user.setEmail(request.getEmail());
+                contactsChanged = true;
+            }
+
+            if (StringUtils.hasText(request.getMobile())) {
+                // 如果新手机号跟旧手机号不同，需要首先判断新手机号是否已经存在，如果存在则抛出异常
+                String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+                boolean mobileChanged = !request.getMobile().equals(user.getMobile());
+                boolean countryChanged = !normalizedCountry.equals(CountryCodeUtils.normalize(user.getCountry()));
+                if (mobileChanged || countryChanged) {
+                    if (existsByMobileAndPlatform(request.getMobile(),
+                            normalizedCountry,
+                            request.getPlatform())) {
+                        throw new MobileExistsException(
+                                I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, request.getMobile()));
+                    }
+                }
+                user.setMobile(request.getMobile());
+                user.setCountry(normalizedCountry);
+                contactsChanged = true;
+            } else if (StringUtils.hasText(request.getCountry()) && StringUtils.hasText(user.getMobile())) {
+                String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+                boolean countryChanged = !normalizedCountry.equals(CountryCodeUtils.normalize(user.getCountry()));
+                if (countryChanged
+                        && existsByMobileAndPlatform(user.getMobile(), normalizedCountry, request.getPlatform())) {
+                    throw new MobileExistsException(
+                            I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, user.getMobile()));
+                }
+                user.setCountry(normalizedCountry);
+                contactsChanged = true;
+            }
+
+            if (StringUtils.hasText(request.getDescription())) {
+                user.setDescription(request.getDescription());
+            }
+
+            UserEntity updatedUser = save(user);
+            if (updatedUser == null) {
+                throw new RuntimeException("User update failed..!!");
+            }
+
+            // T1 正向同步：联系方式变更后镜像到该用户名下所有有效 Member
+            if (contactsChanged) {
+                syncMemberContacts(updatedUser);
+            }
+
+            return UserConvertUtils.convertToUserResponse(user);
+
+        } else {
+            throw new RuntimeException(I18Consts.I18N_USER_NOT_FOUND);
+        }
+    }
+
+    @Transactional
+    public UserResponse changePassword(UserRequest request) {
+        UserEntity currentUser = authService.getUser();
+        Optional<UserEntity> userOptional = findByUid(currentUser.getUid());
+        if (userOptional.isPresent()) {
+            UserEntity user = userOptional.get();
+            String oldEncryptedPassword = user.getPassword(); // 假设这是数据库中加密后的密码
+            String oldRawPassword = request.getOldPassword(); // 用户输入的旧密码
+            String newRawPassword = request.getNewPassword(); // 用户输入的新密码
+
+            // 验证旧密码
+            if (oldEncryptedPassword == null || passwordEncoder.matches(oldRawPassword, oldEncryptedPassword)) {
+                // 旧密码验证通过，设置新密码
+                String newEncryptedPassword = passwordEncoder.encode(newRawPassword);
+                user.setPassword(newEncryptedPassword); // 更新用户密码
+                // 更新密码修改时间
+                user.setPasswordModifiedAt(BdDateUtils.now());
+                user = save(user); // 保存用户信息到数据库，假设save方法已经存在
+                //
+                return UserConvertUtils.convertToUserResponse(user); // 返回更新后的用户信息
+            } else {
+                // 旧密码验证失败，抛出业务校验异常（GlobalExceptionHandler 专门拦截，warn 级别不打印堆栈）
+                throw new BusinessException(I18Consts.I18N_USER_OLD_PASSWORD_WRONG);
+            }
+        } else {
+            throw new BusinessException(I18Consts.I18N_USER_NOT_FOUND);
+        }
+    }
+
+    // 管理员修改子成员用户密码, 无需验证旧密码；普通成员仅能修改自己的密码
+    @Transactional
+    public UserResponse adminChangePassword(UserRequest request) {
+        // 收缩权限：非管理员仅能修改自己的密码（与 UserRestController @PreAuthorize 双层防护）
+        if (!authService.isOrgAdminOrSuperUser() && !authService.isSelfUserUid(request.getUid())) {
+            throw new RuntimeException(I18Consts.I18N_PERMISSION_UPDATE_DENIED);
+        }
+        Optional<UserEntity> userOptional = findByUid(request.getUid());
+        if (userOptional.isPresent()) {
+            UserEntity user = userOptional.get();
+            String newRawPassword = request.getNewPassword(); // 用户输入的新密码
+            // 设置新密码
+            String newEncryptedPassword = passwordEncoder.encode(newRawPassword);
+            user.setPassword(newEncryptedPassword); // 更新用户密码
+            // 更新密码修改时间
+            user.setPasswordModifiedAt(BdDateUtils.now());
+            user = save(user); // 保存用户信息到数据库，假设save方法已经存在
+            //
+            return UserConvertUtils.convertToUserResponse(user); // 返回更新后的用户信息
+        } else {
+            throw new RuntimeException(I18Consts.I18N_USER_NOT_FOUND);
+        }
+    }
+
+    // 已登录用户通过手机号/邮箱验证码重置自己的密码（忘记旧密码场景）
+    // 绑定校验与验证码校验已在 UserRestController 完成，此处仅更新当前用户密码
+    @Transactional
+    public UserResponse resetPassword(UserRequest request) {
+        UserEntity currentUser = authService.getUser();
+        Optional<UserEntity> userOptional = findByUid(currentUser.getUid());
+        if (userOptional.isPresent()) {
+            UserEntity user = userOptional.get();
+            String newRawPassword = request.getNewPassword(); // 用户输入的新密码
+            // 设置新密码
+            String newEncryptedPassword = passwordEncoder.encode(newRawPassword);
+            user.setPassword(newEncryptedPassword); // 更新用户密码
+            // 更新密码修改时间
+            user.setPasswordModifiedAt(BdDateUtils.now());
+            user = save(user); // 保存用户信息到数据库
+            //
+            return UserConvertUtils.convertToUserResponse(user); // 返回更新后的用户信息
+        } else {
+            throw new BusinessException(I18Consts.I18N_USER_NOT_FOUND);
+        }
+    }
+
+    @Transactional
+    @CacheEvict(value = "admin")
+    public UserResponse changeEmail(UserRequest request) {
+        UserEntity currentUser = authService.getUser();
+        Optional<UserEntity> userOptional = findByUid(currentUser.getUid());
+        if (userOptional.isPresent()) {
+            UserEntity user = userOptional.get();
+            if (StringUtils.hasText(request.getEmail())) {
+                // 保护超级管理员账号：禁止将邮箱改为与超管相同（除非本人就是超管）
+                validateNotUsingSuperCredentials(request.getEmail(), null, user.getUid());
+                // 如果新邮箱跟旧邮箱不同，需要首先判断新邮箱是否已经存在，如果存在则抛出异常
+                if (!request.getEmail().equals(user.getEmail())) {
+                    if (existsByEmailAndPlatform(request.getEmail(),
+                            request.getPlatform())) {
+                        throw new EmailExistsException(
+                                I18Consts.withArgs(I18Consts.I18N_EMAIL_ALREADY_EXISTS, request.getEmail()));
+                    }
+                }
+                user.setEmail(request.getEmail());
+            } else {
+                throw new RuntimeException(I18Consts.I18N_EMAIL_REQUIRED);
+            }
+            user.setEmailVerified(true);
+            user = save(user);
+            // T1 正向同步：邮箱变更后镜像到该用户名下所有有效 Member
+            syncMemberContacts(user);
+            //
+            return UserConvertUtils.convertToUserResponse(user);
+        } else {
+            throw new RuntimeException(I18Consts.I18N_USER_NOT_FOUND);
+        }
+    }
+
+    @Transactional
+    @CacheEvict(value = "admin")
+    public UserResponse changeMobile(UserRequest request) {
+        UserEntity currentUser = authService.getUser();
+        Optional<UserEntity> userOptional = findByUid(currentUser.getUid());
+        if (userOptional.isPresent()) {
+            UserEntity user = userOptional.get();
+            String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+            if (StringUtils.hasText(request.getMobile())) {
+                // 保护超级管理员账号：禁止将手机号改为与超管相同（除非本人就是超管）
+                validateNotUsingSuperCredentials(null, request.getMobile(), user.getUid());
+                // 如果新手机号跟旧手机号不同，需要首先判断新手机号是否已经存在，如果存在则抛出异常
+                boolean mobileChanged = !request.getMobile().equals(user.getMobile());
+                boolean countryChanged = !normalizedCountry.equals(CountryCodeUtils.normalize(user.getCountry()));
+                if (mobileChanged || countryChanged) {
+                    if (existsByMobileAndPlatform(request.getMobile(),
+                            normalizedCountry,
+                            request.getPlatform())) {
+                        throw new MobileExistsException(
+                                I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, request.getMobile()));
+                    }
+                }
+                user.setMobile(request.getMobile());
+            } else {
+                throw new RuntimeException(I18Consts.I18N_MOBILE_REQUIRED);
+            }
+            user.setCountry(normalizedCountry);
+            user.setMobileVerified(true);
+            user = save(user);
+            // T1 正向同步：手机号变更后镜像到该用户名下所有有效 Member
+            syncMemberContacts(user);
+
+            return UserConvertUtils.convertToUserResponse(user);
+        } else {
+            throw new RuntimeException(I18Consts.I18N_USER_NOT_FOUND);
+        }
+    }
+
+    @Transactional
+    public UserEntity createUserFromMember(UserRequest request) {
+        String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+        request.setCountry(normalizedCountry);
+        //
+        // 保护超级管理员账号：仅在超级管理员已存在时进行验证
+        // 首次安装时，超级管理员尚未创建，应跳过此验证
+        if (existsBySuperUser()) {
+            validateNotUsingSuperCredentials(request.getEmail(), request.getMobile(), null);
+        }
+
+        if (StringUtils.hasText(request.getMobile())
+                && existsByMobileAndPlatform(request.getMobile(), normalizedCountry, request.getPlatform())) {
+            Optional<UserEntity> userOptional = findByMobileAndPlatform(request.getMobile(), normalizedCountry,
+                    request.getPlatform());
+            return userOptional.get();
+        }
+
+        if (StringUtils.hasText(request.getEmail())
+                && existsByEmailAndPlatform(request.getEmail(), request.getPlatform())) {
+            Optional<UserEntity> userOptional = findByEmailAndPlatform(request.getEmail(),
+                    request.getPlatform());
+            return userOptional.get();
+        }
+        //
+        UserEntity user = UserEntity.builder()
+                .avatar(request.getAvatar())
+                .nickname(request.getNickname())
+                .mobile(request.getMobile())
+                .country(normalizedCountry)
+                .num(request.getMobile())
+                .email(request.getEmail())
+                .superUser(false)
+                .emailVerified(false)
+                .mobileVerified(false)
+                .registerSource(RegisterSource.ADMIN.name())
+                .build();
+        user.setUid(uidUtils.getUid());
+
+        // 设置默认用户名，优先使用邮箱，如果没有则使用手机号
+        // if (StringUtils.hasText(request.getUsername())) {
+        // user.setUsername(request.getUsername());
+        // } else
+        if (StringUtils.hasText(request.getEmail())) {
+            user.setUsername(request.getEmail());
+        } else if (StringUtils.hasText(request.getMobile())) {
+            user.setUsername(CountryCodeUtils.buildMobileUsername(normalizedCountry, request.getMobile()));
+        }
+        //
+        if (StringUtils.hasText(request.getPassword())) {
+            user.setPassword(passwordEncoder.encode(request.getPassword()));
+        } else {
+            user.setPassword(passwordEncoder.encode(bytedeskProperties.getMemberDefaultPassword()));
+        }
+        // 设置密码修改时间为账号创建时间
+        user.setPasswordModifiedAt(BdDateUtils.now());
+        //
+        Optional<OrganizationEntity> orgOptional = organizationRepository.findByUid(request.getOrgUid());
+        if (!orgOptional.isPresent()) {
+            throw new RuntimeException(I18Consts.I18N_ORGANIZATION_NOT_FOUND);
+        } else {
+            user.setCurrentOrganization(orgOptional.get());
+        }
+        //
+        user = addRoleUser(user);
+        return user;
+    }
+
+    /**
+     * 禁止普通用户占用超级管理员的邮箱/手机号。
+     * - 仅以数据库中的 superUser=true 为准（避免在其他地方读取 bytedeskProperties 的邮箱/手机号）
+     * - targetUid == 超管 uid 时允许（即超管本人更新/使用自身邮箱手机号）
+     */
+    public void validateNotUsingSuperCredentials(String email, String mobile, String targetUid) {
+        Optional<UserEntity> superOptional = userRepository.findFirstBySuperUserAndDeletedFalse(true);
+        if (superOptional.isEmpty()) {
+            return;
+        }
+
+        UserEntity superUser = superOptional.get();
+        if (StringUtils.hasText(targetUid) && targetUid.equals(superUser.getUid())) {
+            return;
+        }
+
+        if (StringUtils.hasText(email) && StringUtils.hasText(superUser.getEmail())
+                && email.trim().equalsIgnoreCase(superUser.getEmail().trim())) {
+            throw new EmailExistsException(I18Consts.I18N_EMAIL_RESERVED_BY_SUPER_ADMIN);
+        }
+
+        if (StringUtils.hasText(mobile) && StringUtils.hasText(superUser.getMobile())
+                && mobile.trim().equals(superUser.getMobile().trim())) {
+            throw new MobileExistsException(I18Consts.I18N_MOBILE_RESERVED_BY_SUPER_ADMIN);
+        }
+    }
+
+    /**
+     * 确保 user 的 currentOrganization 指向 orgUid。
+     * updateUserRoles 依赖 currentOrganization 来写入“组织维度”的角色关联。
+     */
+    public UserEntity ensureCurrentOrganization(UserEntity user, String orgUid) {
+        if (user == null) {
+            return null;
+        }
+        if (!StringUtils.hasText(orgUid)) {
+            return user;
+        }
+
+        Optional<OrganizationEntity> orgOptional = organizationRepository.findByUid(orgUid);
+        if (!orgOptional.isPresent()) {
+            throw OrganizationI18nExceptions.organizationNotFound(orgUid);
+        }
+
+        OrganizationEntity organization = orgOptional.get();
+        if (organization.isDeleted()) {
+            throw OrganizationI18nExceptions.organizationNotFound(orgUid);
+        }
+        if (Boolean.FALSE.equals(organization.getEnabled())) {
+            throw OrganizationI18nExceptions.organizationAccessDenied();
+        }
+
+        if (user.getCurrentOrganization() != null && orgUid.equals(user.getCurrentOrganization().getUid())) {
+            user.setCurrentOrganization(organization);
+            return user;
+        }
+        user.setCurrentOrganization(organization);
+        return user;
+    }
+
+    private boolean isOrganizationAvailable(OrganizationEntity organization) {
+        return organization != null
+                && StringUtils.hasText(organization.getUid())
+                && !organization.isDeleted()
+                && !Boolean.FALSE.equals(organization.getEnabled());
+    }
+
+    @Transactional
+    public void removeAllUsersFromOrganization(String orgUid) {
+        if (!StringUtils.hasText(orgUid)) {
+            throw new RuntimeException("orgUid is required");
+        }
+
+        List<UserEntity> users = userRepository.findAllByOrganizationUidWithOrganizations(orgUid);
+        for (UserEntity user : users) {
+            if (user == null || !StringUtils.hasText(user.getUid())) {
+                continue;
+            }
+            removeUserFromOrganization(user.getUid(), orgUid);
+        }
+    }
+
+    /**
+     * 将用户从指定组织中移除：
+     * - 移除 userOrganizationRoles 中该组织的关联
+     * - 若 currentOrganization 正好是该组织，则切换到用户仍然所属的其它组织（如有）
+     * - 同步 currentRoles 为新 currentOrganization 下的角色集合，并确保包含 ROLE_USER
+     */
+    @Transactional
+    public UserEntity removeUserFromOrganization(String userUid, String orgUid) {
+        if (!StringUtils.hasText(userUid)) {
+            throw new RuntimeException("userUid is required");
+        }
+        if (!StringUtils.hasText(orgUid)) {
+            throw new RuntimeException("orgUid is required");
+        }
+
+        // 预加载 userOrganizationRoles/organization/roles，避免懒加载导致删除不生效或 N+1
+        UserEntity managedUser = userRepository.findByUidWithOrganizations(userUid)
+                .orElseThrow(() -> new RuntimeException("User not found: " + userUid));
+
+        // 兼容历史/脏数据
+        if (managedUser.getUserOrganizationRoles() != null) {
+            managedUser.getUserOrganizationRoles().removeIf(
+                    u -> u == null || u.getOrganization() == null
+                            || !StringUtils.hasText(u.getOrganization().getUid()));
+        }
+
+        boolean removedCurrentOrg = managedUser.getCurrentOrganization() != null
+                && StringUtils.hasText(managedUser.getCurrentOrganization().getUid())
+                && orgUid.equals(managedUser.getCurrentOrganization().getUid());
+
+        // 1) 移除该组织的组织-角色关联（orphanRemoval=true 会级联删除关联表记录）
+        if (managedUser.getUserOrganizationRoles() != null) {
+            managedUser.getUserOrganizationRoles().removeIf(
+                    uor -> uor != null
+                            && uor.getOrganization() != null
+                            && StringUtils.hasText(uor.getOrganization().getUid())
+                            && orgUid.equals(uor.getOrganization().getUid()));
+        }
+
+        // 2) 若移除的是当前组织，则切换到剩余组织（如有）
+        if (removedCurrentOrg) {
+            String nextOrgUid = null;
+            if (managedUser.getUserOrganizationRoles() != null) {
+                for (UserOrganizationRoleEntity uor : managedUser.getUserOrganizationRoles()) {
+                    if (uor == null || uor.getOrganization() == null
+                            || !StringUtils.hasText(uor.getOrganization().getUid())) {
+                        continue;
+                    }
+                    if (!isOrganizationAvailable(uor.getOrganization())) {
+                        continue;
+                    }
+                    nextOrgUid = uor.getOrganization().getUid();
+                    break;
+                }
+            }
+
+            if (StringUtils.hasText(nextOrgUid)) {
+                ensureCurrentOrganization(managedUser, nextOrgUid);
+            } else {
+                managedUser.setCurrentOrganization(null);
+            }
+        }
+
+        // 3) 同步 currentRoles
+        syncCurrentRolesForCurrentOrganization(managedUser);
+
+        // 4) 强制确保 ROLE_USER（避免调用 addRoleUser 触发额外 save）
+        Optional<RoleEntity> roleUserOptional = roleRestService.findByNamePlatform(RoleConsts.ROLE_USER);
+        if (roleUserOptional.isPresent()) {
+            RoleEntity roleUser = roleUserOptional.get();
+            Long roleId = roleUser.getId();
+            if (roleId == null) {
+                throw new RuntimeException("Role id is null for ROLE_USER");
+            }
+            RoleEntity managedRoleUser = entityManager.find(RoleEntity.class, roleId);
+            if (managedRoleUser == null) {
+                throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND_BY_ID, roleId));
+            }
+
+            if (managedUser.getCurrentOrganization() == null) {
+                boolean alreadyHas = managedUser.getCurrentRoles().stream()
+                        .anyMatch(r -> r != null && r.getId() != null && r.getId().equals(roleId));
+                if (!alreadyHas) {
+                    managedUser.getCurrentRoles().add(managedRoleUser);
+                }
+            } else {
+                managedUser.addOrganizationRole(managedRoleUser);
+            }
+        }
+
+        // 5) 持久化 + 刷新缓存
+        return save(managedUser);
+    }
+
+    public UserEntity updateUserFromMember(UserEntity user, MemberRequest request) {
+        if (user == null) {
+            return null;
+        }
+        if (StringUtils.hasText(request.getCountry())) {
+            user.setCountry(CountryCodeUtils.normalize(request.getCountry()));
+        }
+        // Profile updates may omit roleUids; in that case keep existing roles unchanged.
+        if (request.getRoleUids() == null) {
+            return user;
+        }
+        return updateUserRoles(user, request.getRoleUids(), request.getOrgUid(), true);
+    }
+
+    /**
+     * T1 正向同步：User 联系方式变更后，镜像到该用户名下所有有效（未软删）Member。
+     *
+     * 语义依据：Member.mobile/email/country 是关联 User 联系方式在组织维度的镜像副本——
+     * MemberRestService.create 以 member 联系方式作为平台用户解析的 join key
+     * （findByMobileAndPlatform(...).orElseGet(() -> createUserFromMember(...))），
+     * 组织内唯一校验（existsByMobileAndOrgUid）也依赖该镜像表达“同一人在同一组织只出现一次”。
+     *
+     * 冲突预检：新值若已被同组织内“其他用户”的有效成员占用，抛出异常，
+     * 由外层事务整体回滚（禁止 User 已改而 Member 半改的部分成功状态）。
+     * 覆盖组织侧手工改动属预期行为，同步前记录 before 值审计日志。
+     */
+    public void syncMemberContacts(UserEntity user) {
+        if (user == null || !StringUtils.hasText(user.getUid())) {
+            return;
+        }
+        List<MemberEntity> members = memberRepository.findByUser_UidAndDeletedFalse(user.getUid());
+        if (members == null || members.isEmpty()) {
+            return;
+        }
+        String country = CountryCodeUtils.normalize(user.getCountry());
+        // 冲突预检：新手机号/邮箱不得被同组织内其他用户的有效成员占用
+        if (StringUtils.hasText(user.getMobile())) {
+            for (MemberEntity member : members) {
+                memberRepository
+                        .findByMobileAndCountryAndOrgUidAndDeletedFalse(user.getMobile(), country, member.getOrgUid())
+                        .filter(other -> other.getUser() == null
+                                || !StringUtils.hasText(other.getUser().getUid())
+                                || !other.getUser().getUid().equals(user.getUid()))
+                        .ifPresent(other -> {
+                            log.warn("member contact sync conflict: mobile {} occupied by member {} (user {}) in org {}",
+                                    user.getMobile(), other.getUid(),
+                                    other.getUser() != null ? other.getUser().getUid() : null, member.getOrgUid());
+                            throw new MobileExistsException(
+                                    I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, user.getMobile()));
+                        });
+            }
+        }
+        if (StringUtils.hasText(user.getEmail())) {
+            for (MemberEntity member : members) {
+                memberRepository
+                        .findByEmailAndOrgUidAndDeletedFalse(user.getEmail(), member.getOrgUid())
+                        .filter(other -> other.getUser() == null
+                                || !StringUtils.hasText(other.getUser().getUid())
+                                || !other.getUser().getUid().equals(user.getUid()))
+                        .ifPresent(other -> {
+                            log.warn("member contact sync conflict: email {} occupied by member {} (user {}) in org {}",
+                                    user.getEmail(), other.getUid(),
+                                    other.getUser() != null ? other.getUser().getUid() : null, member.getOrgUid());
+                            throw new EmailExistsException(
+                                    I18Consts.withArgs(I18Consts.I18N_EMAIL_ALREADY_EXISTS, user.getEmail()));
+                        });
+            }
+        }
+        //
+        for (MemberEntity member : members) {
+            if (java.util.Objects.equals(trimToNull(member.getMobile()), trimToNull(user.getMobile()))
+                    && equalsIgnoreCaseSafe(trimToNull(member.getEmail()), trimToNull(user.getEmail()))
+                    && java.util.Objects.equals(CountryCodeUtils.normalize(member.getCountry()), country)) {
+                continue;
+            }
+            log.info("sync member contacts: memberUid={}, orgUid={}, userUid={}, mobile {} -> {}, email {} -> {}, country {} -> {}",
+                    member.getUid(), member.getOrgUid(), user.getUid(),
+                    member.getMobile(), user.getMobile(),
+                    member.getEmail(), user.getEmail(),
+                    member.getCountry(), country);
+            member.setMobile(trimToNull(user.getMobile()));
+            member.setEmail(trimToNull(user.getEmail()));
+            member.setCountry(country);
+        }
+        memberRepository.saveAll(members);
+    }
+
+    /**
+     * T2 反向同步：管理员编辑成员联系方式后，镜像回关联 User（平台级身份），并复用正向同步
+     * 覆盖该 User 在其他组织的有效 Member。
+     *
+     * 边界：仅传播非空值——清空成员侧联系方式不会清空平台账号联系方式（避免破坏登录身份）；
+     * 平台值变化前做平台级唯一校验（platform 取关联 User 实际值，不依赖可能为空的 request.platform），
+     * 命中其他用户时抛出异常，由外层事务整体回滚。
+     */
+    @Transactional
+    public UserEntity syncUserContactsFromMember(UserEntity user, String mobile, String email, String country) {
+        if (user == null || user.getId() == null) {
+            return user;
+        }
+        UserEntity managedUser = userRepository.findById(user.getId()).orElse(user);
+        boolean changed = false;
+        String normalizedCountry = CountryCodeUtils.normalize(country);
+        //
+        if (StringUtils.hasText(mobile) && !mobile.trim().equals(managedUser.getMobile())) {
+            if (Boolean.TRUE.equals(existsByMobileAndPlatform(mobile.trim(), normalizedCountry,
+                    managedUser.getPlatform()))) {
+                Optional<UserEntity> existing = findByMobileAndPlatform(mobile.trim(), normalizedCountry,
+                        managedUser.getPlatform());
+                if (existing.isEmpty() || !existing.get().getUid().equals(managedUser.getUid())) {
+                    throw new MobileExistsException(
+                            I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, mobile.trim()));
+                }
+            }
+            log.info("reverse sync user mobile: userUid={}, mobile {} -> {}", managedUser.getUid(),
+                    managedUser.getMobile(), mobile.trim());
+            managedUser.setMobile(mobile.trim());
+            changed = true;
+        }
+        if (StringUtils.hasText(email)
+                && (managedUser.getEmail() == null || !email.trim().equalsIgnoreCase(managedUser.getEmail().trim()))) {
+            if (Boolean.TRUE.equals(existsByEmailAndPlatform(email.trim(), managedUser.getPlatform()))) {
+                Optional<UserEntity> existing = findByEmailAndPlatform(email.trim(), managedUser.getPlatform());
+                if (existing.isEmpty() || !existing.get().getUid().equals(managedUser.getUid())) {
+                    throw new EmailExistsException(
+                            I18Consts.withArgs(I18Consts.I18N_EMAIL_ALREADY_EXISTS, email.trim()));
+                }
+            }
+            log.info("reverse sync user email: userUid={}, email {} -> {}", managedUser.getUid(),
+                    managedUser.getEmail(), email.trim());
+            managedUser.setEmail(email.trim());
+            changed = true;
+        }
+        if (!normalizedCountry.equals(CountryCodeUtils.normalize(managedUser.getCountry()))) {
+            managedUser.setCountry(normalizedCountry);
+            changed = true;
+        }
+        if (!changed) {
+            return managedUser;
+        }
+        UserEntity saved = save(managedUser);
+        syncMemberContacts(saved);
+        return saved;
+    }
+
+    private static String trimToNull(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private static boolean equalsIgnoreCaseSafe(String left, String right) {
+        if (left == null || right == null) {
+            return left == right;
+        }
+        return left.equalsIgnoreCase(right);
+    }
+
+    private void syncCurrentRolesForCurrentOrganization(UserEntity user) {
+        user.getCurrentRoles().clear();
+        if (user.getCurrentOrganization() == null
+                || !StringUtils.hasText(user.getCurrentOrganization().getUid())
+                || user.getUserOrganizationRoles() == null) {
+            return;
+        }
+
+        String currentOrgUid = user.getCurrentOrganization().getUid();
+        for (UserOrganizationRoleEntity uor : user.getUserOrganizationRoles()) {
+            if (uor == null || uor.getOrganization() == null
+                    || !StringUtils.hasText(uor.getOrganization().getUid())) {
+                continue;
+            }
+            if (currentOrgUid.equals(uor.getOrganization().getUid()) && uor.getRoles() != null) {
+                user.getCurrentRoles().addAll(uor.getRoles());
+                break;
+            }
+        }
+    }
+
+    /**
+     * 更新用户在“当前组织(currentOrganization)”下的角色列表。
+     * - 忽略空值
+     * - 将废弃的 member 角色 uid 归一为 user 角色 uid
+     * - 强制确保包含 ROLE_USER
+     */
+    @Transactional
+    public UserEntity updateUserRoles(UserEntity user, Set<String> roleUids) {
+        return updateUserRoles(user, roleUids, null, false);
+    }
+
+    @Transactional
+    public UserEntity updateUserRoles(UserEntity user, Set<String> roleUids, String targetOrgUid,
+            boolean preserveCurrentOrganization) {
+        if (user == null) {
+            return null;
+        }
+        if (user.getId() == null) {
+            throw new RuntimeException("User id is required for role update");
+        }
+
+        // Always operate on a managed entity to avoid merge side-effects on join tables
+        UserEntity managedUser = userRepository.findById(user.getId())
+                .orElseThrow(() -> new RuntimeException("User not found: " + user.getUid()));
+
+        String originalCurrentOrgUid = null;
+        if (managedUser.getCurrentOrganization() != null
+                && StringUtils.hasText(managedUser.getCurrentOrganization().getUid())) {
+            originalCurrentOrgUid = managedUser.getCurrentOrganization().getUid();
+        }
+
+        // Ensure currentOrganization is set on the managed instance
+        String orgUid = targetOrgUid;
+        if (!StringUtils.hasText(orgUid)
+                && user.getCurrentOrganization() != null
+                && StringUtils.hasText(user.getCurrentOrganization().getUid())) {
+            orgUid = user.getCurrentOrganization().getUid();
+        }
+        ensureCurrentOrganization(managedUser, orgUid);
+
+        Set<String> incomingRoleUids = roleUids;
+        if (incomingRoleUids == null) {
+            incomingRoleUids = new LinkedHashSet<>();
+        }
+
+        // Backward compatibility:
+        // - Older payloads may still contain deprecated role uid: df_role_member_uid
+        // - Ignore blank role uid values
+        Set<String> normalizedRoleUids = new LinkedHashSet<>();
+        for (String roleUid : incomingRoleUids) {
+            if (!StringUtils.hasText(roleUid)) {
+                continue;
+            }
+            if (BytedeskConsts.DEPRECATED_ROLE_MEMBER_UID.equals(roleUid)) {
+                normalizedRoleUids.add(BytedeskConsts.DEFAULT_ROLE_USER_UID);
+            } else {
+                normalizedRoleUids.add(roleUid);
+            }
+        }
+
+        // All users must have ROLE_USER (df_role_user_uid)
+        normalizedRoleUids.add(BytedeskConsts.DEFAULT_ROLE_USER_UID);
+
+        Set<String> existingRestrictedRoleUids = extractRestrictedRoleUids(managedUser.getRoleUids());
+        Set<String> requestedRestrictedRoleUids = extractRestrictedRoleUids(normalizedRoleUids);
+        if (!existingRestrictedRoleUids.equals(requestedRestrictedRoleUids)) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_RESTRICTED_ROLE_UPDATE_NOT_SUPPORTED);
+        }
+
+        // 首先判断是否有变化，如果无变化则不更新
+        if (managedUser.getRoleUids() != null && managedUser.getRoleUids().equals(normalizedRoleUids)) {
+            return managedUser;
+        }
+
+        // 删除当前组织下的非平台角色
+        managedUser.removeOrganizationRoles();
+
+        // 增加角色，遍历roleUids，逐个添加
+        for (String roleUid : normalizedRoleUids) {
+            Optional<RoleEntity> optional = roleRestService.findByUid(roleUid);
+            if (optional.isPresent()) {
+                RoleEntity role = optional.get();
+                // Avoid entityManager.merge(detachedRole) which may trigger
+                // OptimisticLockException
+                // and mark the surrounding transaction rollback-only.
+                Long roleId = role.getId();
+                if (roleId == null) {
+                    throw new RuntimeException("Role id is null for uid: " + roleUid);
+                }
+                RoleEntity managedRole = entityManager.find(RoleEntity.class, roleId);
+                if (managedRole == null) {
+                    throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND_BY_ID_AND_UID, roleId, roleUid));
+                }
+                managedUser.addOrganizationRole(managedRole);
+            } else {
+                throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND, roleUid));
+            }
+        }
+
+        if (preserveCurrentOrganization
+                && originalCurrentOrgUid != null
+                && StringUtils.hasText(originalCurrentOrgUid)
+                && StringUtils.hasText(orgUid)
+                && !originalCurrentOrgUid.equals(orgUid)) {
+            ensureCurrentOrganization(managedUser, originalCurrentOrgUid);
+            syncCurrentRolesForCurrentOrganization(managedUser);
+        }
+
+        // managedUser is tracked by JPA; changes will flush on transaction commit
+        return managedUser;
+    }
+
+    private Set<String> extractRestrictedRoleUids(Set<String> roleUids) {
+        Set<String> restrictedRoleUids = new LinkedHashSet<>();
+        if (roleUids == null) {
+            return restrictedRoleUids;
+        }
+        for (String roleUid : roleUids) {
+            if (RESTRICTED_ROLE_UIDS.contains(roleUid)) {
+                restrictedRoleUids.add(roleUid);
+            }
+        }
+        return restrictedRoleUids;
+    }
+
+    public UserEntity addRoleAgent(UserEntity user) {
+        return addRole(user, RoleConsts.ROLE_AGENT);
+    }
+
+    public UserEntity removeRoleAgent(UserEntity user) {
+        return removeRole(user, RoleConsts.ROLE_AGENT);
+    }
+
+    @Transactional
+    public UserEntity addRoleUser(UserEntity user) {
+        return addRole(user, RoleConsts.ROLE_USER);
+    }
+
+    public UserEntity addRoleAdmin(UserEntity user) {
+        return addRole(user, RoleConsts.ROLE_ADMIN);
+    }
+
+    public UserEntity removeRoleAdmin(UserEntity user) {
+        return removeRole(user, RoleConsts.ROLE_ADMIN);
+    }
+
+    public UserEntity addRoleDeptAdmin(UserEntity user) {
+        return addRole(user, RoleConsts.ROLE_DEPT_ADMIN);
+    }
+
+    public UserEntity removeRoleDeptAdmin(UserEntity user) {
+        return removeRole(user, RoleConsts.ROLE_DEPT_ADMIN);
+    }
+
+    public UserEntity addRoleWorkgroupAdmin(UserEntity user) {
+        return addRole(user, RoleConsts.ROLE_WORKGROUP_ADMIN);
+    }
+
+    public UserEntity removeRoleWorkgroupAdmin(UserEntity user) {
+        return removeRole(user, RoleConsts.ROLE_WORKGROUP_ADMIN);
+    }
+
+    @Transactional
+    public UserEntity addRoleSuper(UserEntity user) {
+        return addRole(user, RoleConsts.ROLE_SUPER);
+    }
+
+    @Transactional
+    public UserEntity removeRoleSuper(UserEntity user) {
+        return removeRole(user, RoleConsts.ROLE_SUPER);
+    }
+
+    @Transactional
+    public UserEntity addRole(UserEntity user, String roleName) {
+        if (user == null) {
+            throw new RuntimeException("User is null");
+        }
+
+        // Always operate on a managed entity to avoid merge side-effects on join
+        // tables.
+        // New user objects may not have an id yet (e.g., createUserFromMember); persist
+        // first.
+        UserEntity managedUser;
+        if (user.getId() == null) {
+            managedUser = userRepository.save(user);
+        } else {
+            managedUser = userRepository.findById(user.getId())
+                    .orElseThrow(() -> new RuntimeException("User not found: " + user.getUid()));
+        }
+
+        // Ensure organization context from input user is applied to the managed
+        // instance.
+        // Some callers set currentOrganization on the detached instance and then call
+        // addRole.
+        String orgUid = null;
+        if (user.getCurrentOrganization() != null && StringUtils.hasText(user.getCurrentOrganization().getUid())) {
+            orgUid = user.getCurrentOrganization().getUid();
+        }
+        ensureCurrentOrganization(managedUser, orgUid);
+
+        Optional<RoleEntity> roleOptional = roleRestService.findByNamePlatform(roleName);
+        if (!roleOptional.isPresent()) {
+            throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND, roleName));
+        }
+
+        RoleEntity role = roleOptional.get();
+        Long roleId = role.getId();
+        if (roleId == null) {
+            throw new RuntimeException("Role id is null for name: " + roleName);
+        }
+        // Avoid entityManager.merge(detachedRole) which may trigger
+        // OptimisticLockException
+        // and mark the surrounding transaction rollback-only under concurrent access.
+        RoleEntity managedRole = entityManager.find(RoleEntity.class, roleId);
+        if (managedRole == null) {
+            throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND_BY_ID_AND_NAME, roleId, roleName));
+        }
+
+        RoleEntity managedRoleUser = null;
+        if (managedUser.getCurrentOrganization() != null) {
+            Optional<RoleEntity> roleUserOptional = roleRestService.findByNamePlatform(RoleConsts.ROLE_USER);
+            if (!roleUserOptional.isPresent()) {
+                throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND, RoleConsts.ROLE_USER));
+            }
+            Long roleUserId = roleUserOptional.get().getId();
+            if (roleUserId == null) {
+                throw new RuntimeException("Role id is null for name: " + RoleConsts.ROLE_USER);
+            }
+            managedRoleUser = entityManager.find(RoleEntity.class, roleUserId);
+            if (managedRoleUser == null) {
+                throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_ROLE_NOT_FOUND_BY_ID_AND_NAME, roleUserId, RoleConsts.ROLE_USER));
+            }
+        }
+
+        // Allow ROLE_USER without organization context so auto-registered users have a
+        // default role
+        if (managedUser.getCurrentOrganization() == null) {
+            if (!RoleConsts.ROLE_USER.equals(roleName)) {
+                throw new RuntimeException("当前用户未加入任何组织，无法分配角色: " + roleName);
+            }
+
+            boolean alreadyHasRole = managedUser.getCurrentRoles().stream()
+                    .anyMatch(r -> r.getId() != null && r.getId().equals(managedRole.getId()));
+            if (!alreadyHasRole) {
+                managedUser.getCurrentRoles().add(managedRole);
+            }
+        } else {
+            managedUser.addOrganizationRole(managedRoleUser);
+            managedUser.addOrganizationRole(managedRole);
+        }
+
+        try {
+            return userRepository.save(managedUser);
+        } catch (Exception e) {
+            log.error("User add role failed..!!", e);
+            throw new RuntimeException(
+                    "User add role failed: " + e.getClass().getSimpleName() + ": " + e.getMessage(),
+                    e);
+        }
+    }
+
+    public UserEntity removeRole(UserEntity user, String roleName) {
+        Optional<RoleEntity> roleOptional = roleRestService.findByNamePlatform(roleName);
+        if (roleOptional.isPresent()) {
+            user.removeOrganizationRole(roleOptional.get());
+            //
+            try {
+                return userRepository.save(user);
+            } catch (Exception e) {
+                log.error("User remove role failed..!!", e);
+                throw new RuntimeException("User remove role failed..!!", e);
+            }
+        } else {
+            throw new RuntimeException(I18Consts.I18N_RESOURCE_NOT_FOUND);
+        }
+    }
+
+    @Cacheable(value = "user", key = "#email + '-' + #platform", unless = "#result == null")
+    public Optional<UserEntity> findByEmailAndPlatform(String email, String platform) {
+        return userRepository.findByEmailAndPlatformAndDeletedFalse(email, platform);
+    }
+
+    @Cacheable(value = "user", key = "#mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#country)) + '-' + #platform", unless = "#result == null")
+    public Optional<UserEntity> findByMobileAndPlatform(String mobile, String country, String platform) {
+        return userRepository.findByMobileAndCountryAndPlatformAndDeletedFalse(
+                mobile,
+                CountryCodeUtils.normalize(country),
+                platform);
+    }
+
+    public Optional<UserEntity> findByMobileAndPlatform(String mobile, String platform) {
+        return findByMobileAndPlatform(mobile, CountryCodeUtils.DEFAULT_COUNTRY, platform);
+    }
+
+    @Cacheable(value = "user", key = "#username + '-' + #platform", unless = "#result == null")
+    public Optional<UserEntity> findByUsernameAndPlatform(String username, String platform) {
+        return userRepository.findByUsernameAndPlatformAndDeletedFalse(username, platform);
+    }
+
+    // @Cacheable(value = "user", key = "#uid", unless = "#result == null")
+    public Optional<UserEntity> findByUid(String uid) {
+        return userRepository.findByUid(uid);
+    }
+
+    /**
+     * 按uid加载用户并预取组织关系（currentOrganization/userOrganizationRoles/organization/roles）。
+     * 不走缓存，供需要判断“用户真实组织归属”的场景使用（如管理员转移校验），
+     * 避免缓存反序列化后懒加载集合为 null 导致误判。
+     */
+    public Optional<UserEntity> findByUidWithOrganizations(String uid) {
+        return userRepository.findByUidWithOrganizations(uid);
+    }
+
+    @Cacheable(value = "admin", unless = "#result == null")
+    public Optional<UserEntity> getSuper() {
+        return userRepository.findFirstBySuperUserAndDeletedFalse(true);
+    }
+
+    @Cacheable(value = "user:exists", key = "#username + '-' + #platform", unless = "#result == null")
+    public Boolean existsByUsernameAndPlatform(String username, String platform) {
+        return userRepository.existsByUsernameAndPlatformAndDeletedFalse(username, platform);
+    }
+
+    @Cacheable(value = "user:exists", key = "#mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#country)) + '-' + #platform", unless = "#result == null")
+    public Boolean existsByMobileAndPlatform(String mobile, String country, String platform) {
+        return userRepository.existsByMobileAndCountryAndPlatformAndDeletedFalse(
+                mobile,
+                CountryCodeUtils.normalize(country),
+                platform);
+    }
+
+    public Boolean existsByMobileAndPlatform(String mobile, String platform) {
+        return existsByMobileAndPlatform(mobile, CountryCodeUtils.DEFAULT_COUNTRY, platform);
+    }
+
+    @Cacheable(value = "user:exists", key = "#email + '-' + #platform", unless = "#result == null")
+    public Boolean existsByEmailAndPlatform(String email, String platform) {
+        return userRepository.existsByEmailAndPlatformAndDeletedFalse(email, platform);
+    }
+
+    // exists by username and mobile
+    @Cacheable(value = "user:exists", key = "#username + '-' + #mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#country)) + '-' + #platform", unless = "#result == null")
+    public Boolean existsByUsernameAndMobileAndPlatform(String username, String mobile,
+            String country,
+            String platform) {
+        return userRepository.existsByUsernameAndMobileAndCountryAndPlatformAndDeletedFalse(
+                username,
+                mobile,
+                CountryCodeUtils.normalize(country),
+                platform);
+    }
+
+    public Boolean existsByUsernameAndMobileAndPlatform(String username, String mobile,
+            String platform) {
+        return existsByUsernameAndMobileAndPlatform(username, mobile, CountryCodeUtils.DEFAULT_COUNTRY, platform);
+    }
+
+    public Boolean existsBySuperUser() {
+        return userRepository.existsBySuperUserAndDeletedFalse(true);
+    }
+
+    @Transactional
+    @Caching(put = {
+            @CachePut(value = "user", key = "#user.username + '-' + #user.platform", unless = "#user.username == null"),
+            @CachePut(value = "user", key = "#user.mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#user.country)) + '-' + #user.platform", unless = "#user.mobile == null"),
+            @CachePut(value = "user", key = "#user.email + '-' + #user.platform", unless = "#user.email == null"),
+            @CachePut(value = "user", key = "#user.uid", unless = "#user.uid == null"),
+    }, evict = {
+            @CacheEvict(value = "user:exists", key = "#user.username + '-' + #user.platform", condition = "#user.username != null"),
+            @CacheEvict(value = "user:exists", key = "#user.mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#user.country)) + '-' + #user.platform", condition = "#user.mobile != null"),
+            @CacheEvict(value = "user:exists", key = "#user.email + '-' + #user.platform", condition = "#user.email != null"),
+    })
+    public UserEntity save(UserEntity user) {
+        if (StringUtils.hasText(user.getMobile())) {
+            user.setCountry(CountryCodeUtils.normalize(user.getCountry()));
+        }
+        try {
+            return userRepository.save(user);
+        } catch (ObjectOptimisticLockingFailureException optimisticLockingFailureException) {
+            log.error("User save failed..!!", optimisticLockingFailureException);
+            return userRepository.save(user);
+        } catch (Exception e) {
+            log.error("User save failed..!!", e);
+            throw new RuntimeException("User save failed..!!", e);
+        }
+    }
+
+    @Caching(evict = {
+            @CacheEvict(value = "user", key = "#user.username + '-' + #user.platform"),
+            @CacheEvict(value = "user", key = "#user.mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#user.country)) + '-' + #user.platform"),
+            @CacheEvict(value = "user", key = "#user.email + '-' + #user.platform"),
+            @CacheEvict(value = "user", key = "#user.uid"),
+            @CacheEvict(value = "user:exists", key = "#user.username + '-' + #user.platform"),
+            @CacheEvict(value = "user:exists", key = "#user.mobile + '-' + (T(com.bytedesk.core.utils.CountryCodeUtils).normalize(#user.country)) + '-' + #user.platform"),
+            @CacheEvict(value = "user:exists", key = "#user.email + '-' + #user.platform"),
+    })
+    public void delete(UserEntity user) {
+        user.setDeleted(true);
+        save(user);
+    }
+
+    public void logout(String accessToken) {
+        log.debug("logout {}", accessToken);
+
+        // 发布用户登出事件
+        UserEntity user = authService.getUser();
+        bytedeskEventPublisher.publishEvent(new UserLogoutEvent(this, user));
+
+        // 将token设置为已撤销状态
+        tokenRestService.revokeAccessToken(accessToken, "logout");
+    }
+
+    // TODO: 待完善
+    public String createNickname() {
+        String randomId = uidUtils.getUid().substring(11, 15);
+        return "User" + randomId;
+    }
+
+}

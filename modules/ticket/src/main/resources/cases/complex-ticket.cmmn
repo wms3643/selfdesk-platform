@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/CMMN/20151109/MODEL"
+             xmlns:flowable="http://flowable.org/cmmn"
+             xmlns:cmmndi="http://www.omg.org/spec/CMMN/20151109/CMMNDI"
+             xmlns:dc="http://www.omg.org/spec/CMMN/20151109/DC"
+             xmlns:di="http://www.omg.org/spec/CMMN/20151109/DI"
+             targetNamespace="http://flowable.org/cmmn">
+
+    <case id="complexTicket" name="复杂工单处理">
+        <casePlanModel id="casePlanModel" name="复杂工单计划">
+            <planItem id="PI_createTicket" definitionRef="createTicket"/>
+            <planItem id="PI_analyzeTicket" definitionRef="analyzeTicket">
+                <entryCriterion id="analyze_entry" sentryRef="analyzeSentry"/>
+            </planItem>
+            <planItem id="PI_customerVerify" definitionRef="customerVerify">
+                <entryCriterion id="verify_entry" sentryRef="verifySentry"/>
+            </planItem>
+            
+            <sentry id="analyzeSentry">
+                <planItemOnPart sourceRef="PI_createTicket">
+                    <standardEvent>complete</standardEvent>
+                </planItemOnPart>
+            </sentry>
+            
+            <sentry id="verifySentry">
+                <planItemOnPart sourceRef="PI_analyzeTicket">
+                    <standardEvent>complete</standardEvent>
+                </planItemOnPart>
+            </sentry>
+
+            <stage id="createTicket" name="创建工单">
+                <planItem id="PI_recordDetails" definitionRef="recordTicketDetails"/>
+                <planItem id="PI_setPriority" definitionRef="setPriority"/>
+            </stage>
+            
+            <stage id="analyzeTicket" name="技术分析">
+                <planItem id="PI_investigate" definitionRef="investigate"/>
+            </stage>
+
+            <stage id="customerVerify" name="客户验证">
+                <planItem id="PI_verify" definitionRef="verify"/>
+                <planItem id="PI_satisfaction" definitionRef="satisfaction"/>
+            </stage>
+
+            <humanTask id="recordTicketDetails" name="记录工单详情"/>
+            <humanTask id="setPriority" name="设置优先级"/>
+            <humanTask id="investigate" name="调查问题"/>
+            <humanTask id="verify" name="验证问题"/>
+            <humanTask id="satisfaction" name="满意度评价"/>
+        </casePlanModel>
+    </case>
+
+    <cmmndi:CMMNDI>
+        <cmmndi:CMMNDiagram id="CMMNDiagram_1">
+            <cmmndi:CMMNShape id="CasePlanModel_1_di" cmmnElementRef="casePlanModel">
+                <dc:Bounds x="40" y="40" width="500" height="500" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_createTicket_di" cmmnElementRef="PI_createTicket">
+                <dc:Bounds x="110" y="110" width="100" height="80" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_analyzeTicket_di" cmmnElementRef="PI_analyzeTicket">
+                <dc:Bounds x="250" y="110" width="100" height="80" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_customerVerify_di" cmmnElementRef="PI_customerVerify">
+                <dc:Bounds x="390" y="110" width="100" height="80" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_recordDetails_di" cmmnElementRef="PI_recordDetails">
+                <dc:Bounds x="120" y="150" width="100" height="60" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_setPriority_di" cmmnElementRef="PI_setPriority">
+                <dc:Bounds x="120" y="210" width="100" height="60" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_investigate_di" cmmnElementRef="PI_investigate">
+                <dc:Bounds x="500" y="150" width="100" height="80" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_verify_di" cmmnElementRef="PI_verify">
+                <dc:Bounds x="850" y="150" width="100" height="80" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+            
+            <cmmndi:CMMNShape id="PI_satisfaction_di" cmmnElementRef="PI_satisfaction">
+                <dc:Bounds x="850" y="250" width="100" height="80" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+
+            <cmmndi:CMMNShape id="analyze_entry_di" cmmnElementRef="analyze_entry">
+                <dc:Bounds x="240" y="140" width="20" height="20" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+
+            <cmmndi:CMMNShape id="verify_entry_di" cmmnElementRef="verify_entry">
+                <dc:Bounds x="380" y="140" width="20" height="20" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNShape>
+
+            <cmmndi:CMMNEdge id="PlanItemOnPart_1_di" cmmnElementRef="analyzeSentry" targetCMMNElementRef="analyze_entry">
+                <di:waypoint x="210" y="150" />
+                <di:waypoint x="240" y="150" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNEdge>
+
+            <cmmndi:CMMNEdge id="PlanItemOnPart_2_di" cmmnElementRef="verifySentry" targetCMMNElementRef="verify_entry">
+                <di:waypoint x="350" y="150" />
+                <di:waypoint x="380" y="150" />
+                <cmmndi:CMMNLabel/>
+            </cmmndi:CMMNEdge>
+        </cmmndi:CMMNDiagram>
+    </cmmndi:CMMNDI>
+</definitions> 

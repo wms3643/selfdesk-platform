@@ -1,0 +1,207 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-27 12:20:45
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-05-26 17:22:54
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.black;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.springframework.data.domain.Page;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.read.listener.PageReadListener;
+import com.bytedesk.core.base.BaseRestController;
+import com.bytedesk.core.utils.JsonResult;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.AllArgsConstructor;
+
+/**
+ * 黑名单管理接口
+ * 
+ * @author Jackning
+ * @since 2024-06-27
+ */
+@RestController
+@RequestMapping("/api/v1/black")
+@AllArgsConstructor
+@Tag(name = "Blacklist Management", description = "Blacklist CRUD APIs")
+public class BlackRestController extends BaseRestController<BlackRequest, BlackRestService> {
+
+    private final BlackRestService blackRestService;
+
+    /**
+     * 根据组织查询黑名单
+     * 
+     * @param request 查询请求
+     * @return 分页黑名单列表
+     */
+    @Operation(summary = "Query Blacklist by Organization", description = "Return the blacklist for the current organization")
+    @Override
+    public ResponseEntity<?> queryByOrg(BlackRequest request) {
+        
+        Page<BlackResponse> page = blackRestService.queryByOrg(request);
+
+        return ResponseEntity.ok(JsonResult.success(page));
+    }
+
+    /**
+     * 根据用户查询黑名单
+     * 
+     * @param request 查询请求
+     * @return 分页黑名单列表
+     */
+    @Operation(summary = "Query Blacklist by User", description = "Return the blacklist for the current user")
+    @Override
+    public ResponseEntity<?> queryByUser(BlackRequest request) {
+        
+        Page<BlackResponse> page = blackRestService.queryByUser(request);
+
+        return ResponseEntity.ok(JsonResult.success(page));
+    }
+
+    /**
+     * 根据UID查询黑名单
+     * 
+     * @param request 查询请求
+     * @return 黑名单详情
+     */
+    @Operation(summary = "Query Blacklist by UID", description = "Query the blacklist entry by unique identifier")
+    @Override
+    public ResponseEntity<?> queryByUid(BlackRequest request) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'queryByUid'");
+    }
+
+    /**
+     * 查询当前blackUid是否存在于黑名单中
+     * 
+     * @param request 查询请求
+     * @return 黑名单详情
+     */
+    @Operation(summary = "Check Whether blackUid Exists in Blacklist", description = "Check whether the current blackUid exists in the blacklist")
+    @GetMapping("/exists/blackUid")
+    public ResponseEntity<?> existsByBlackUid(BlackRequest request) {
+        // 
+        Boolean existsByBlackUid = blackRestService.existsByBlackUid(request);
+        if (existsByBlackUid) {
+            return ResponseEntity.ok(JsonResult.success(true));
+        }
+        return ResponseEntity.ok(JsonResult.success(false));
+    }
+
+    // unblock/BlackUid
+    @Operation(summary = "Unblock from Blacklist", description = "Remove the specified blacklist entry")
+    @PostMapping("/unblock/blackUid")
+    public ResponseEntity<?> unblockByBlackUid(@RequestBody BlackRequest request) {
+        //
+        blackRestService.unblockByBlackUid(request);
+
+        return ResponseEntity.ok(JsonResult.success());
+    }
+
+    /**
+     * 创建黑名单
+     * 
+     * @param request 创建请求
+     * @return 创建的黑名单
+     */
+    @Operation(summary = "Create Blacklist Entry", description = "Create a new blacklist record")
+    @Override
+    public ResponseEntity<?> create(BlackRequest request) {
+
+        BlackResponse response = blackRestService.create(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 更新黑名单
+     * 
+     * @param request 更新请求
+     * @return 更新后的黑名单
+     */
+    @Operation(summary = "Update Blacklist Entry", description = "Update an existing blacklist record")
+    @Override
+    public ResponseEntity<?> update(BlackRequest request) {
+
+        BlackResponse response = blackRestService.update(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 删除黑名单
+     * 
+     * @param request 删除请求
+     * @return 删除结果
+     */
+    @Operation(summary = "Delete Blacklist Entry", description = "Delete the specified blacklist record")
+    @Override
+    public ResponseEntity<?> delete(BlackRequest request) {
+
+        blackRestService.delete(request);
+        
+        return ResponseEntity.ok(JsonResult.success());
+    }
+
+    /**
+     * 导出黑名单列表
+     * 
+     * @param request 导出请求
+     * @param response HTTP响应
+     * @return 导出结果
+     */
+    @Operation(summary = "Export Blacklist", description = "Export blacklist data to Excel")
+    @Override
+    public Object export(BlackRequest request, HttpServletResponse response) {
+        return exportTemplate(
+            request,
+            response,
+            blackRestService,
+            BlackExcel.class,
+            "黑名单",
+            "black"
+        );
+    }
+
+    @Operation(summary = "Import Blacklist", description = "Import blacklist data from Excel")
+    @PostMapping("/import")
+    public ResponseEntity<?> importExcel(@RequestPart("file") MultipartFile file,
+            @RequestParam("orgUid") String orgUid) {
+        List<BlackResponse> imported = new ArrayList<>();
+        try {
+            EasyExcel.read(file.getInputStream(), BlackExcel.class, new PageReadListener<BlackExcel>(rows -> {
+                for (BlackExcel row : rows) {
+                    imported.add(blackRestService.createFromExcelRow(row, orgUid));
+                }
+            })).sheet().doRead();
+            return ResponseEntity.ok(JsonResult.success(imported));
+        } catch (Exception e) {
+            return ResponseEntity.ok(JsonResult.error("Import black failed: " + e.getMessage()));
+        }
+    }
+    
+
+}

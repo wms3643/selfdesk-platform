@@ -1,0 +1,1026 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-07-15 15:58:11
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-15 07:03:57
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.routing_strategy;
+
+import java.time.ZonedDateTime;
+import java.util.Optional;
+
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.stereotype.Component;
+import org.springframework.beans.BeanUtils;
+import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.core.config.BytedeskEventPublisher;
+import com.bytedesk.core.message.IMessageSendService;
+import com.bytedesk.core.message.MessageEntity;
+import com.bytedesk.core.message.MessageProtobuf;
+import com.bytedesk.core.message.MessageRestService;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+import com.bytedesk.core.thread.ThreadRestService;
+import com.bytedesk.core.thread.event.ThreadProcessCreateEvent;
+import com.bytedesk.core.topic.TopicUtils;
+import com.bytedesk.core.topic_subscription.TopicSubscriptionRestService;
+import com.bytedesk.service.agent.AgentEntity;
+import com.bytedesk.service.agent.AgentRestService;
+import com.bytedesk.service.presence.PresenceFacadeService;
+import com.bytedesk.service.queue.QueueEntity;
+import com.bytedesk.service.queue.QueueService;
+import com.bytedesk.service.queue_member.QueueMemberAcceptTypeEnum;
+import com.bytedesk.service.queue_member.QueueMemberEntity;
+import com.bytedesk.service.queue_member.QueueMemberRestService;
+import com.bytedesk.service.queue_settings.QueueSettingsEntity;
+import com.bytedesk.service.queue_settings.QueueTipTemplateUtils;
+import com.bytedesk.service.utils.ServiceConvertUtils;
+import com.bytedesk.service.utils.ThreadMessageUtil;
+import com.bytedesk.core.enums.VisitorCallTypeEnum;
+import com.bytedesk.service.visitor.VisitorRequest;
+import com.bytedesk.service.visitor_thread.VisitorThreadService;
+import com.bytedesk.service.visitor_thread.VisitorThreadTimeoutService;
+import com.bytedesk.webrtc.webrtc.IWebrtcService;
+import com.bytedesk.webrtc.webrtc.WebrtcDirectionEnum;
+import com.bytedesk.webrtc.webrtc.dto.WebrtcInviteRequest;
+import com.bytedesk.core.utils.BdDateUtils;
+import com.bytedesk.service.agent_settings.AgentSettingsEntity;
+import com.bytedesk.service.message_leave_settings.MessageLeaveSettingsEntity;
+import com.bytedesk.service.worktime_settings.WorktimeService;
+import com.bytedesk.service.worktime_settings.WorktimeSettingEntity;
+import com.bytedesk.service.worktime_settings.WorktimeSettingsResolver;
+import com.bytedesk.core.thread.enums.ThreadTypeEnum;
+import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
+
+import com.bytedesk.core.thread.ThreadEntity;
+import com.bytedesk.core.thread.ThreadContent;
+import com.bytedesk.core.message.content.WelcomeContent;
+import com.bytedesk.core.message.enums.MessageTypeEnum;
+import com.bytedesk.core.message.content.QueueNotification;
+import com.bytedesk.service.utils.WelcomeContentUtils;
+import com.bytedesk.core.message.content.QueueContent;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * 客服线程路由策略
+ * 负责处理一对一人工客服的线程创建和路由逻辑
+ * 
+ * @author jackning 270580156@qq.com
+ */
+@Slf4j
+@Component("agentThreadStrategy")
+@AllArgsConstructor
+public class AgentThreadRoutingStrategy extends AbstractThreadRoutingStrategy {
+
+    private final AgentRestService agentRestService;
+    private final ThreadRestService threadRestService;
+    private final VisitorThreadService visitorThreadService;
+    private final VisitorThreadTimeoutService visitorThreadTimeoutService;
+    private final IMessageSendService messageSendService;
+    private final QueueService queueService;
+    private final QueueMemberRestService queueMemberRestService;
+    private final MessageRestService messageRestService;
+    private final BytedeskEventPublisher bytedeskEventPublisher;
+    private final PresenceFacadeService presenceFacadeService;
+    private final TopicSubscriptionRestService topicSubscriptionRestService;
+    private final ObjectProvider<ThreadRoutingContext> threadRoutingContextProvider;
+    private final IWebrtcService webrtcService;
+    private final WorktimeService worktimeService;
+    private final WorktimeSettingsResolver worktimeSettingsResolver;
+
+    @Override
+    protected ThreadRestService getThreadRestService() {
+        return threadRestService;
+    }
+
+    @Override
+    public MessageProtobuf createThread(VisitorRequest visitorRequest) {
+        return executeWithExceptionHandling("create agent thread", visitorRequest.getSid(),
+                () -> createAgentThread(visitorRequest));
+    }
+
+    /**
+     * 创建客服线程
+     * 一对一人工客服，不支持机器人接待
+     */
+    public MessageProtobuf createAgentThread(VisitorRequest visitorRequest) {
+        long startTime = System.currentTimeMillis();
+        VisitorCallTypeEnum callType = normalizeCallType(visitorRequest);
+        String visitorUidForTopic = resolveVisitorUidForThreadTopic(visitorRequest);
+        log.info("开始创建客服线程 - visitorUid: {}, agentUid: {}, callType: {}",
+                visitorUidForTopic, visitorRequest.getSid(), callType.name());
+
+        // 1. 验证和获取客服信息
+        log.debug("步骤1: 开始获取客服信息 - agentUid: {}", visitorRequest.getSid());
+        AgentEntity agentEntity = getAgentEntity(visitorRequest.getSid());
+        log.info("步骤1完成: 成功获取客服信息 - agentUid: {}, 最大接待数: {}, 在线且可用: {}",
+                agentEntity.getUid(), agentEntity.getMaxThreadCount(),
+                presenceFacadeService.isAgentOnlineAndAvailableForCallType(agentEntity, callType));
+
+        // 2. 处理现有线程或创建新线程
+        log.debug("步骤2: 开始处理线程创建或获取");
+        String topic = TopicUtils.formatOrgAgentThreadTopic(visitorRequest.getSid(), visitorUidForTopic);
+        log.debug("生成线程主题: {}", topic);
+        ThreadEntity thread = getOrCreateThread(visitorRequest, agentEntity, topic, callType);
+        log.info("步骤2完成: 线程处理完成 - threadUid: {}, 状态: {}, 是否新建: {}",
+                thread.getUid(), thread.getStatus(), thread.isNew());
+
+        // 3. 如果是已存在的线程，直接返回相应消息
+        if (isExistingActiveThread(thread)) {
+            log.info("检测到现有活跃线程，直接返回 - threadUid: {}, 状态: {}",
+                    thread.getUid(), thread.getStatus());
+            MessageProtobuf result = handleExistingThread(visitorRequest, thread, agentEntity, callType);
+            log.info("创建客服线程完成(现有线程) - 总耗时: {}ms", System.currentTimeMillis() - startTime);
+            return result;
+        }
+
+        // 4. 新线程处理：加入队列并根据客服状态路由
+        log.debug("步骤4: 开始新线程路由处理");
+        MessageProtobuf result = routeNewThread(thread, agentEntity, visitorRequest, callType);
+        log.info("创建客服线程完成(新线程) - threadUid: {}, 总耗时: {}ms",
+                thread.getUid(), System.currentTimeMillis() - startTime);
+        return result;
+    }
+
+    /**
+     * 获取或创建线程
+     */
+    private ThreadEntity getOrCreateThread(VisitorRequest visitorRequest, AgentEntity agentEntity, String topic,
+            VisitorCallTypeEnum callType) {
+        long startTime = System.currentTimeMillis();
+        // String visitorUidForTopic = resolveVisitorUidForThreadTopic(visitorRequest);
+        log.debug("开始获取或创建线程 - topic: {}, agentUid: {}",
+                topic, agentEntity.getUid());
+
+        try {
+            // 当强制新建会话时，直接创建新会话，跳过复用逻辑
+            if (Boolean.TRUE.equals(visitorRequest.getForceNewThread())) {
+                log.debug("forceNewThread=true, 创建新的客服线程 - topic: {}", topic);
+                ThreadEntity newThread = visitorThreadService.createAgentThread(visitorRequest, agentEntity, topic);
+                log.info("新线程创建完成(强制) - threadUid: {}, 总耗时: {}ms",
+                        newThread.getUid(), System.currentTimeMillis() - startTime);
+                return newThread;
+            }
+
+            // 查询现有线程
+            long dbStartTime = System.currentTimeMillis();
+            log.debug("开始查询现有线程 - topic: {}", topic);
+
+            Optional<ThreadEntity> existingThread = threadRestService.findFirstByTopicNotClosed(topic);
+            if (existingThread.isPresent()) {
+                ThreadEntity thread = existingThread.get();
+                log.info("发现现有线程 - threadUid: {}, 状态: {}, 创建时间: {}, 查询耗时: {}ms",
+                        thread.getUid(), thread.getStatus(), thread.getCreatedAt(),
+                        System.currentTimeMillis() - dbStartTime);
+
+                // 处理不同状态的现有线程
+                if (thread.isNew() || thread.isChatting() || thread.isQueuing()) {
+                    log.debug("现有线程状态可直接使用 - 状态: {}", thread.getStatus());
+                    return thread;
+                } else if (thread.isOffline()
+                        && !presenceFacadeService.isAgentOnlineAndAvailableForCallType(agentEntity, callType)) {
+                    log.debug("客服离线且线程离线状态，继续使用现有线程");
+                    return thread;
+                }
+                log.debug("现有线程状态不符合条件，将创建新线程 - 当前状态: {}, 在线且可用: {}",
+                        thread.getStatus(),
+                        presenceFacadeService.isAgentOnlineAndAvailableForCallType(agentEntity, callType));
+            } else {
+                log.debug("未找到现有线程，将创建新线程");
+            }
+
+            // 创建新线程
+            log.debug("开始创建新线程 - topic: {}", topic);
+            long createStartTime = System.currentTimeMillis();
+            ThreadEntity newThread = visitorThreadService.createAgentThread(visitorRequest, agentEntity, topic);
+            log.info("新线程创建完成 - threadUid: {}, 创建耗时: {}ms, 总耗时: {}ms",
+                    newThread.getUid(), System.currentTimeMillis() - createStartTime,
+                    System.currentTimeMillis() - startTime);
+            return newThread;
+
+        } catch (Exception e) {
+            log.error("获取或创建线程失败 - topic: {}, agentUid: {}, 错误: {}, 耗时: {}ms",
+                    topic, agentEntity.getUid(), e.getMessage(),
+                    System.currentTimeMillis() - startTime, e);
+            throw new RuntimeException("Failed to get or create thread", e);
+        }
+    }
+
+    /**
+     * 检查是否为已存在的活跃线程
+     */
+    private boolean isExistingActiveThread(ThreadEntity thread) {
+        log.debug("检查线程活跃状态 - threadUid: {}, 状态: {}", thread.getUid(), thread.getStatus());
+        boolean isActive = thread.isChatting() || thread.isQueuing();
+        log.debug("线程活跃状态检查结果 - threadUid: {}, 是否活跃: {}, 是否聊天中: {}, 是否排队中: {}",
+                thread.getUid(), isActive, thread.isChatting(), thread.isQueuing());
+        return isActive;
+    }
+
+    /**
+     * 处理已存在的线程
+     */
+    private MessageProtobuf handleExistingThread(VisitorRequest request, ThreadEntity thread, AgentEntity agentEntity,
+            VisitorCallTypeEnum callType) {
+        if (thread.isChatting()) {
+            // 重新初始化会话额外信息
+            ThreadEntity updatedThread = visitorThreadService.reInitAgentThreadExtra(request, thread, agentEntity);
+            log.info("Already have a processing thread {}", updatedThread.getAgent());
+            return getAgentContinueMessage(updatedThread);
+        } else if (thread.isQueuing()) {
+            return handleExistingQueuingAgentThread(request, thread, agentEntity, callType);
+        }
+        throw new IllegalStateException("Unexpected thread state: " + thread.getStatus());
+    }
+
+    /**
+     * 处理现有排队线程：刷新/重入时，如果此刻客服在线且有接待名额则直接接入，否则继续排队。
+     */
+    private MessageProtobuf handleExistingQueuingAgentThread(VisitorRequest visitorRequest,
+            ThreadEntity threadFromRequest,
+            AgentEntity agentEntity,
+            VisitorCallTypeEnum callType) {
+
+        ThreadEntity latestThread = getThreadByUid(threadFromRequest.getUid());
+        if (!latestThread.isQueuing()) {
+            log.info("排队线程状态已变化，按最新状态返回 - threadUid: {}, status: {}",
+                    latestThread.getUid(), latestThread.getStatus());
+            return handleExistingThread(visitorRequest, latestThread, agentEntity, callType);
+        }
+
+        // 复用已有队列成员（不产生重复入队）
+        QueueMemberEntity queueMemberEntity = queueService.enqueueAgent(latestThread, agentEntity.toUserProtobuf(),
+                visitorRequest);
+
+        // 客服在线且可用，并且未达到最大接待数时，直接接入
+        if (presenceFacadeService.isAgentOnlineAndAvailableForCallType(agentEntity, callType)
+                && queueMemberEntity.getAgentQueue() != null
+                && queueMemberEntity.getAgentQueue().getChattingCount() < agentEntity.getMaxThreadCount()) {
+            log.info("排队会话检测到客服空闲，准备直接接入 - threadUid: {}, agentUid: {}",
+                    latestThread.getUid(), agentEntity.getUid());
+            return handleAvailableAgent(visitorRequest, latestThread, agentEntity, queueMemberEntity);
+        }
+
+        return getAgentQueueMessage(latestThread);
+    }
+
+    /**
+     * 路由新线程
+     */
+    private MessageProtobuf routeNewThread(ThreadEntity thread, AgentEntity agentEntity,
+            VisitorRequest visitorRequest,
+            VisitorCallTypeEnum callType) {
+        log.debug("开始新线程路由 - threadUid: {}, agentUid: {}", thread.getUid(), agentEntity.getUid());
+
+        // 加入队列
+        QueueMemberEntity queueMemberEntity = queueService.enqueueAgent(thread, agentEntity.toUserProtobuf(),
+                visitorRequest);
+        QueueEntity agentQueue = queueMemberEntity.getAgentQueue();
+
+        // 工作时间判断：非工作时间统一按离线留言处理（可走备选）
+        boolean isInServiceTime = resolveIsInServiceTime(visitorRequest, agentEntity);
+        if (!isInServiceTime) {
+            log.info("不在服务时间内，按离线留言处理 - agentUid: {}, threadUid: {}", agentEntity.getUid(), thread.getUid());
+            MessageProtobuf backupResult = tryRouteToBackup(visitorRequest, agentEntity, callType);
+            if (backupResult != null) {
+                return backupResult;
+            }
+            return handleOfflineAgent(visitorRequest, thread, agentEntity, queueMemberEntity);
+        }
+
+        // 队列限制判断：如果队列已满且配置了强制留言，直接进入留言流程（不进入排队）
+        QueueSettingsEntity queueSettings = getAgentQueueSettings(visitorRequest, agentEntity);
+        if (shouldForceLeaveMessage(agentQueue, queueSettings)) {
+            int queuingCount = agentQueue != null ? agentQueue.getQueuingCount() : 0;
+            int maxWaiting = resolveMaxWaiting(queueSettings);
+            log.info(
+                    "Agent queue limit reached, diverting to leave message - agentUid: {}, queueSize: {}, maxWaiting: {}",
+                    agentEntity.getUid(), queuingCount, maxWaiting);
+            return visitorThreadTimeoutService.handleQueueOverflowLeaveMessage(thread, queueMemberEntity);
+        }
+
+        // 根据客服状态路由
+        log.debug("开始根据客服状态进行路由 - 可用状态: {}", agentEntity.isAvailable());
+        if (presenceFacadeService.isAgentOnlineAndAvailableForCallType(agentEntity, callType)) {
+            log.info("客服在线且可用，路由到在线客服处理");
+            return routeOnlineAgent(visitorRequest, thread, agentEntity, queueMemberEntity);
+        } else {
+            log.info("客服不可用，路由到离线处理 -  可用状态: {}", agentEntity.isAvailable());
+
+            // 离线时尝试切换到备选接待（备选客服 > 备选工作组）
+            MessageProtobuf backupResult = tryRouteToBackup(visitorRequest, agentEntity, callType);
+            if (backupResult != null) {
+                return backupResult;
+            }
+            return handleOfflineAgent(visitorRequest, thread, agentEntity, queueMemberEntity);
+        }
+    }
+
+    private MessageProtobuf tryRouteToBackup(VisitorRequest visitorRequest, AgentEntity agentEntity,
+            VisitorCallTypeEnum callType) {
+        if (visitorRequest == null || agentEntity == null) {
+            return null;
+        }
+        if (isBackupHopExceeded(visitorRequest)) {
+            return null;
+        }
+
+        MessageLeaveSettingsEntity settings = resolveEffectiveMessageLeaveSettings(visitorRequest, agentEntity);
+        if (settings == null) {
+            return null;
+        }
+
+        // 1) 备选客服
+        if (Boolean.TRUE.equals(settings.getMessageLeaveBackupAgentEnabled())
+                && StringUtils.hasText(settings.getMessageLeaveBackupAgentUid())
+                && !settings.getMessageLeaveBackupAgentUid().equals(agentEntity.getUid())) {
+            try {
+                Optional<AgentEntity> backupAgentOpt = agentRestService
+                        .findByUid(settings.getMessageLeaveBackupAgentUid());
+                if (backupAgentOpt.isPresent()
+                        && presenceFacadeService.isAgentOnlineAndAvailableForCallType(backupAgentOpt.get(), callType)) {
+                    VisitorRequest backupReq = buildBackupRequest(visitorRequest,
+                            settings.getMessageLeaveBackupAgentUid(), ThreadTypeEnum.AGENT);
+                    log.info("Agent offline, divert to backup agent - fromAgentUid: {}, backupAgentUid: {}",
+                            agentEntity.getUid(), settings.getMessageLeaveBackupAgentUid());
+                    return threadRoutingContextProvider.getObject().createCsThread(backupReq);
+                }
+            } catch (Exception e) {
+                log.warn("Divert to backup agent failed - backupAgentUid: {}, error: {}",
+                        settings.getMessageLeaveBackupAgentUid(), e.getMessage());
+            }
+        }
+
+        // 2) 备选工作组
+        if (Boolean.TRUE.equals(settings.getMessageLeaveBackupWorkgroupEnabled())
+                && StringUtils.hasText(settings.getMessageLeaveBackupWorkgroupUid())) {
+            try {
+                VisitorRequest backupReq = buildBackupRequest(visitorRequest,
+                        settings.getMessageLeaveBackupWorkgroupUid(), ThreadTypeEnum.WORKGROUP);
+                log.info("Agent offline, divert to backup workgroup - fromAgentUid: {}, backupWorkgroupUid: {}",
+                        agentEntity.getUid(), settings.getMessageLeaveBackupWorkgroupUid());
+                return threadRoutingContextProvider.getObject().createCsThread(backupReq);
+            } catch (Exception e) {
+                log.warn("Divert to backup workgroup failed - backupWorkgroupUid: {}, error: {}",
+                        settings.getMessageLeaveBackupWorkgroupUid(), e.getMessage());
+            }
+        }
+
+        return null;
+    }
+
+    private MessageLeaveSettingsEntity resolveEffectiveMessageLeaveSettings(VisitorRequest visitorRequest,
+            AgentEntity agentEntity) {
+        AgentSettingsEntity agentSettings = agentEntity.getSettings();
+        if (agentSettings == null) {
+            return null;
+        }
+        boolean useDraft = isDraftEnabled(visitorRequest);
+        if (useDraft && agentSettings.getDraftMessageLeaveSettings() != null) {
+            return agentSettings.getDraftMessageLeaveSettings();
+        }
+        if (agentSettings.getMessageLeaveSettings() != null) {
+            return agentSettings.getMessageLeaveSettings();
+        }
+        return agentSettings.getDraftMessageLeaveSettings();
+    }
+
+    private boolean isBackupHopExceeded(VisitorRequest visitorRequest) {
+        try {
+            String extra = visitorRequest.getExtra();
+            if (!StringUtils.hasText(extra)) {
+                return false;
+            }
+            JSONObject obj = JSON.parseObject(extra);
+            Integer hop = obj != null ? obj.getInteger("backupHop") : null;
+            return hop != null && hop >= 1;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private VisitorRequest buildBackupRequest(VisitorRequest original, String sid, ThreadTypeEnum type) {
+        VisitorRequest backup = new VisitorRequest();
+        BeanUtils.copyProperties(original, backup);
+        backup.setSid(sid);
+        backup.setForceNewThread(Boolean.TRUE);
+        // 防止循环备选：最多一跳
+        backup.setExtra(incrementBackupHop(original.getExtra()));
+        if (type == ThreadTypeEnum.AGENT) {
+            backup.setAgentType();
+        } else if (type == ThreadTypeEnum.WORKGROUP) {
+            backup.setWorkgroupType();
+        }
+        return backup;
+    }
+
+    private String incrementBackupHop(String extra) {
+        try {
+            JSONObject obj = StringUtils.hasText(extra) ? JSON.parseObject(extra) : new JSONObject();
+            if (obj == null) {
+                obj = new JSONObject();
+            }
+            Integer hop = obj.getInteger("backupHop");
+            obj.put("backupHop", hop == null ? 1 : hop + 1);
+            return obj.toJSONString();
+        } catch (Exception e) {
+            return extra;
+        }
+    }
+
+    /**
+     * 统一规范 callType，并透传到 extra 便于后续音视频流程扩展（机器人/工作组可复用）
+     */
+    private VisitorCallTypeEnum normalizeCallType(VisitorRequest visitorRequest) {
+        VisitorCallTypeEnum callType = visitorRequest != null
+                ? visitorRequest.formatCallType()
+                : VisitorCallTypeEnum.TEXT;
+        if (visitorRequest == null) {
+            return callType;
+        }
+        visitorRequest.setCallType(callType.name());
+        visitorRequest.setExtra(mergeCallTypeToExtra(visitorRequest.getExtra(), callType.name()));
+        return callType;
+    }
+
+    private String mergeCallTypeToExtra(String extra, String callType) {
+        try {
+            JSONObject obj = StringUtils.hasText(extra) ? JSON.parseObject(extra) : new JSONObject();
+            if (obj == null) {
+                obj = new JSONObject();
+            }
+            obj.put("callType", callType);
+            return obj.toJSONString();
+        } catch (Exception e) {
+            return extra;
+        }
+    }
+
+    private void triggerAutoCallInviteIfNeeded(VisitorRequest visitorRequest, ThreadEntity thread, AgentEntity agent) {
+        if (visitorRequest == null || thread == null || agent == null) {
+            return;
+        }
+        if (!visitorRequest.shouldTriggerWebrtcInvite()) {
+            return;
+        }
+        String inviteVideoMode = visitorRequest.resolveWebrtcInviteVideoMode();
+
+        String callerUid = resolveVisitorUidForThreadTopic(visitorRequest);
+        if (!StringUtils.hasText(callerUid) || !StringUtils.hasText(agent.getUid())) {
+            log.warn("skip auto call invite: invalid caller/callee, threadUid={}, callerUid={}, calleeUid={}",
+                    thread.getUid(), callerUid, agent.getUid());
+            return;
+        }
+
+        try {
+            WebrtcInviteRequest inviteRequest = new WebrtcInviteRequest();
+            inviteRequest.setThreadUid(thread.getUid());
+            inviteRequest.setCallerUid(callerUid);
+            inviteRequest.setCalleeUid(agent.getUid());
+            inviteRequest.setCallType(VisitorCallTypeEnum.WEBRTC);
+            inviteRequest.setVideoMode(inviteVideoMode);
+            inviteRequest.setDirection(WebrtcDirectionEnum.INBOUND);
+            webrtcService.invite(inviteRequest);
+            log.info("auto call invite sent, threadUid={}, callType={}, videoMode={}, callerUid={}, calleeUid={}",
+                    thread.getUid(), VisitorCallTypeEnum.WEBRTC.name(), inviteVideoMode, callerUid, agent.getUid());
+        } catch (Exception e) {
+            log.warn("auto call invite failed, threadUid={}, callType={}, videoMode={}, reason={}",
+                    thread.getUid(), VisitorCallTypeEnum.WEBRTC.name(), inviteVideoMode, e.getMessage());
+        }
+    }
+
+    /**
+     * 路由在线客服
+     */
+    private MessageProtobuf routeOnlineAgent(VisitorRequest visitorRequest, ThreadEntity thread,
+            AgentEntity agentEntity, QueueMemberEntity queueMemberEntity) {
+        long startTime = System.currentTimeMillis();
+        log.info("开始在线客服路由处理 - threadUid: {}, agentUid: {}, agentNickname: {}",
+                thread.getUid(), agentEntity.getUid(), agentEntity.getNickname());
+
+        // 检查是否达到最大接待人数
+        int currentChattingCount = queueMemberEntity.getAgentQueue().getChattingCount();
+        int maxThreadCount = agentEntity.getMaxThreadCount();
+
+        log.info("检查客服接待容量 - 当前接待: {}, 最大接待: {}, agentUid: {}, 队列ID: {}",
+                currentChattingCount, maxThreadCount, agentEntity.getUid(), queueMemberEntity.getAgentQueue().getUid());
+
+        MessageProtobuf result;
+        if (currentChattingCount < maxThreadCount) {
+            log.info("客服容量充足，直接分配给客服 - agentUid: {}, 剩余容量: {}",
+                    agentEntity.getUid(), maxThreadCount - currentChattingCount);
+            result = handleAvailableAgent(visitorRequest, thread, agentEntity, queueMemberEntity);
+        } else {
+            log.info("客服已达最大接待数，线程进入排队 - agentUid: {}, 当前排队数: {}",
+                    agentEntity.getUid(), queueMemberEntity.getAgentQueue().getQueuingCount());
+            result = handleQueuedAgent(visitorRequest, thread, agentEntity, queueMemberEntity);
+        }
+
+        log.info("在线客服路由处理完成 - threadUid: {}, agentUid: {}, 处理耗时: {}ms",
+                thread.getUid(), agentEntity.getUid(), System.currentTimeMillis() - startTime);
+        return result;
+    }
+
+    /**
+     * 处理可用客服（客服在线且未达到最大接待人数）
+     */
+    private MessageProtobuf handleAvailableAgent(VisitorRequest visitorRequest, ThreadEntity threadFromRequest,
+            AgentEntity agent,
+            QueueMemberEntity queueMemberEntity) {
+        long startTime = System.currentTimeMillis();
+        log.info("开始处理可用客服分配 - threadUid: {}, agentUid: {}, agentNickname: {}",
+                threadFromRequest.getUid(), agent.getUid(), agent.getNickname());
+
+        try {
+            validateThread(threadFromRequest, "handle available agent");
+            Assert.notNull(agent, "AgentEntity must not be null");
+            Assert.notNull(queueMemberEntity, "QueueMemberEntity must not be null");
+
+            // 获取并更新线程状态
+            log.debug("获取最新线程状态并更新为聊天状态");
+            ThreadEntity thread = getThreadByUid(threadFromRequest.getUid());
+            String tip = getAgentWelcomeMessage(visitorRequest, agent);
+            WelcomeContent welcomeContent = WelcomeContentUtils.buildAgentWelcomeContent(agent, tip);
+            String jsonWelcome = welcomeContent != null ? welcomeContent.toJson() : null;
+            thread.setChatting().setContent(ThreadContent.of(MessageTypeEnum.WELCOME, tip, jsonWelcome).toJson());
+            log.debug("线程状态更新完成 - 状态: {}, 欢迎消息长度: {}",
+                    thread.getStatus(), jsonWelcome != null ? jsonWelcome.length() : 0);
+
+            // 保存线程
+            long saveStartTime = System.currentTimeMillis();
+            log.debug("开始保存线程状态");
+            ThreadEntity savedThread = saveThread(thread);
+            log.debug("线程保存完成 - 耗时: {}ms", System.currentTimeMillis() - saveStartTime);
+
+            // 更新队列成员状态
+            log.debug("开始更新队列成员状态为已接受");
+            updateQueueMemberForAcceptance(queueMemberEntity);
+            log.debug("队列成员状态更新完成");
+
+            // 发布事件
+            log.debug("开始发布线程事件");
+            publishThreadEvents(savedThread);
+            log.debug("线程事件发布完成");
+
+            // 发送欢迎消息
+            log.debug("开始发送欢迎消息");
+            long msgStartTime = System.currentTimeMillis();
+            MessageProtobuf messageProtobuf = ThreadMessageUtil.getThreadWelcomeMessage(welcomeContent, savedThread);
+            messageSendService.sendProtobufMessage(messageProtobuf);
+
+            // 音视频接入意图：客服接入成功后自动发起邀请（失败不影响文本会话主流程）
+            triggerAutoCallInviteIfNeeded(visitorRequest, savedThread, agent);
+
+            log.info("可用客服处理完成 - threadUid: {}, agentUid: {}, 消息发送耗时: {}ms, 总处理耗时: {}ms",
+                    savedThread.getUid(), agent.getUid(), System.currentTimeMillis() - msgStartTime,
+                    System.currentTimeMillis() - startTime);
+
+            return messageProtobuf;
+
+        } catch (IllegalArgumentException e) {
+            log.error("可用客服处理失败，参数错误 - threadUid: {}, agentUid: {}, 错误: {}",
+                    threadFromRequest.getUid(), agent.getUid(), e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            log.error("可用客服处理失败，系统异常 - threadUid: {}, agentUid: {}, 错误: {}, 耗时: {}ms",
+                    threadFromRequest.getUid(), agent.getUid(), e.getMessage(),
+                    System.currentTimeMillis() - startTime, e);
+            throw new RuntimeException("Failed to handle available agent", e);
+        }
+    }
+
+    /**
+     * 处理排队客服（客服在线但已达到最大接待人数）
+     */
+    private MessageProtobuf handleQueuedAgent(VisitorRequest visitorRequest, ThreadEntity threadFromRequest,
+            AgentEntity agent,
+            QueueMemberEntity queueMemberEntity) {
+        long startTime = System.currentTimeMillis();
+        log.info("开始处理客服排队情况 - threadUid: {}, agentUid: {}, agentNickname: {}",
+                threadFromRequest.getUid(), agent.getUid(), agent.getNickname());
+
+        validateThread(threadFromRequest, "handle queued agent");
+
+        // 获取并更新线程状态
+        log.debug("获取最新线程状态用于排队处理");
+        ThreadEntity thread = getThreadByUid(threadFromRequest.getUid());
+
+        // 获取排队配置
+        QueueSettingsEntity queueSettings = getAgentQueueSettings(visitorRequest, agent);
+        int avgWaitTimePerPerson = queueSettings != null && queueSettings.getAvgWaitTimePerPerson() != null
+                ? queueSettings.getAvgWaitTimePerPerson()
+                : QueueTipTemplateUtils.DEFAULT_AVG_WAIT_TIME_PER_PERSON;
+
+        log.debug("生成排队消息内容");
+        int queuingCount = queueMemberEntity.getAgentQueue().getQueuingCount();
+        // 使用模板生成排队提示语
+        String queueContentText = generateAgentQueueMessage(visitorRequest, agent, queuingCount, avgWaitTimePerPerson);
+
+        // 计算等待时间
+        int waitSeconds = queuingCount * avgWaitTimePerPerson;
+        int waitMinutes = (int) Math.ceil(waitSeconds / 60.0);
+        String estimatedWaitTime = QueueTipTemplateUtils.formatWaitTime(waitSeconds);
+
+        QueueContent.QueueContentBuilder<?, ?> builder = QueueContent.builder()
+                .content(queueContentText)
+                .position(queuingCount)
+                .queueSize(queuingCount)
+                .serverTimestamp(System.currentTimeMillis())
+                .waitSeconds(waitSeconds)
+                .estimatedWaitTime(estimatedWaitTime);
+        QueueContent queueContent = builder.build();
+        thread.setQueuing()
+                .setContent(ThreadContent.of(MessageTypeEnum.QUEUE, queueContentText, queueContent.toJson()).toJson());
+        log.debug("线程状态设置为排队 - threadUid: {}, 排队消息长度: {}, 预计等待: {}分钟",
+                thread.getUid(), queueContentText != null ? queueContentText.length() : 0, waitMinutes);
+
+        // 保存线程
+        log.debug("保存排队状态的线程");
+        ThreadEntity savedThread = saveThread(thread);
+        log.debug("排队线程保存完成 - threadUid: {}", savedThread.getUid());
+
+        // 发布事件
+        log.debug("发布排队线程相关事件");
+        publishThreadEvents(savedThread);
+
+        // 发送排队消息
+        log.debug("开始发送排队消息");
+        long msgStartTime = System.currentTimeMillis();
+        MessageProtobuf messageProtobuf = ThreadMessageUtil.getThreadQueueMessage(queueContent, savedThread);
+        messageSendService.sendProtobufMessage(messageProtobuf);
+        log.info("排队消息发送完成 - threadUid: {}, 消息发送耗时: {}ms, 总处理耗时: {}ms",
+                savedThread.getUid(), System.currentTimeMillis() - msgStartTime,
+                System.currentTimeMillis() - startTime);
+
+        // 向客服发送排队通知消息
+        log.debug("开始向客服发送排队通知 - agentUid: {}", agent.getUid());
+        try {
+            // 获取客服的排队会话线程
+            ThreadEntity agentQueueThread = queueMemberRestService.createAgentQueueThread(agent);
+
+            // 确保客服已订阅其排队通知线程 topic，避免通知丢失（同步 best-effort）
+            try {
+                subscribeThreadTopics(agentQueueThread, topicSubscriptionRestService);
+            } catch (Exception e) {
+                log.debug("Failed to subscribe agent queue thread topic - agentUid: {}, error: {}", agent.getUid(),
+                        e.getMessage());
+            }
+
+            // 构建排队通知内容
+            QueueNotification queueNotification = QueueNotification.builder()
+                    .queueMemberUid(queueMemberEntity.getUid())
+                    .threadUid(savedThread.getUid())
+                    .threadTopic(savedThread.getTopic())
+                    .position(queuingCount)
+                    .queueSize(queuingCount)
+                    .estimatedWaitMs((long) waitSeconds * 1000)
+                    .serverTimestamp(System.currentTimeMillis())
+                    .user(savedThread.getUser())
+                    .build();
+
+            // 创建并发送排队通知消息
+            MessageProtobuf agentNoticeMessage = ThreadMessageUtil.getAgentQueueNoticeMessage(queueNotification,
+                    agentQueueThread);
+            messageSendService.sendProtobufMessage(agentNoticeMessage);
+            log.info("客服排队通知发送完成 - agentUid: {}, queueMemberUid: {}, position: {}",
+                    agent.getUid(), queueMemberEntity.getUid(), queuingCount);
+        } catch (Exception e) {
+            log.error("发送客服排队通知失败 - agentUid: {}, error: {}", agent.getUid(), e.getMessage(), e);
+        }
+
+        return messageProtobuf;
+    }
+
+    /**
+     * 处理离线客服
+     */
+    private MessageProtobuf handleOfflineAgent(VisitorRequest visitorRequest, ThreadEntity threadFromRequest,
+            AgentEntity agent,
+            QueueMemberEntity queueMemberEntity) {
+        long startTime = System.currentTimeMillis();
+        log.info("开始处理离线客服情况 - threadUid: {}, agentUid: {}, agentNickname: {}, presenceOnline: {}",
+                threadFromRequest.getUid(), agent.getUid(), agent.getNickname(),
+                presenceFacadeService.isAgentOnline(agent));
+
+        validateThread(threadFromRequest, "handle offline agent");
+
+        // 获取并更新线程状态
+        log.debug("获取最新线程状态用于离线处理");
+        ThreadEntity thread = getThreadByUid(threadFromRequest.getUid());
+        thread = visitorThreadService.reInitAgentThreadExtra(visitorRequest, thread, agent);
+
+        log.debug("生成离线消息内容");
+        String offlineContent = getAgentOfflineMessage(visitorRequest, agent);
+        thread.setOffline()
+                .setContent(ThreadContent.of(MessageTypeEnum.LEAVE_MSG, offlineContent, offlineContent).toJson());
+        log.debug("线程状态设置为离线 - threadUid: {}, 离线消息长度: {}",
+                thread.getUid(), offlineContent != null ? offlineContent.length() : 0);
+
+        // 保存线程
+        log.debug("保存离线状态的线程");
+        ThreadEntity savedThread = saveThread(thread);
+        log.debug("离线线程保存完成 - threadUid: {}", savedThread.getUid());
+
+        // 更新队列状态
+        log.debug("更新队列成员离线状态 - queueMemberUid: {}", queueMemberEntity.getUid());
+        queueMemberEntity.setAgentOffline(true);
+        queueMemberRestService.saveAsyncBestEffort(queueMemberEntity);
+        log.debug("队列成员离线状态更新完成(异步) - queueMemberUid: {}", queueMemberEntity.getUid());
+
+        // 创建离线消息
+        log.debug("创建离线消息实体");
+        long msgCreateStartTime = System.currentTimeMillis();
+        MessageEntity message = ThreadMessageUtil.getAgentThreadOfflineMessage(offlineContent, savedThread);
+        MessageEntity savedMessage = messageRestService.save(message);
+        log.debug("离线消息实体创建完成 - messageUid: {}, 创建耗时: {}ms",
+                savedMessage.getUid(), System.currentTimeMillis() - msgCreateStartTime);
+
+        // 发布事件（包含同步订阅 topic），放在发消息之前，避免首条离线消息因未订阅而丢失
+        log.debug("发布离线线程相关事件");
+        publishThreadEvents(savedThread);
+
+        // 发送离线消息
+        log.debug("开始发送离线消息");
+        long msgSendStartTime = System.currentTimeMillis();
+        MessageProtobuf messageProtobuf = ServiceConvertUtils.convertToMessageProtobuf(savedMessage, savedThread);
+        messageSendService.sendProtobufMessage(messageProtobuf);
+        log.info("离线消息发送完成 - threadUid: {}, 发送耗时: {}ms",
+                savedThread.getUid(), System.currentTimeMillis() - msgSendStartTime);
+
+        log.info("离线客服处理完成 - threadUid: {}, agentUid: {}, 总处理耗时: {}ms",
+                savedThread.getUid(), agent.getUid(), System.currentTimeMillis() - startTime);
+        return messageProtobuf;
+    }
+
+    // ==================== 辅助方法 ====================
+
+    /**
+     * 获取客服实体
+     */
+    private AgentEntity getAgentEntity(String agentUid) {
+        // long startTime = System.currentTimeMillis();
+        log.debug("开始获取客服实体 - agentUid: {}", agentUid);
+
+        try {
+            validateUid(agentUid, "Agent");
+
+            log.debug("开始查询客服实体 - agentUid: {}", agentUid);
+            Optional<AgentEntity> agentOptional = agentRestService.findByUid(agentUid);
+
+            if (!agentOptional.isPresent()) {
+                log.error("客服实体不存在 - agentUid: {}", agentUid);
+                throw new IllegalArgumentException("Agent uid " + agentUid + " not found");
+            }
+
+            AgentEntity agent = agentOptional.get();
+            // log.info("客服实体获取成功 - agentUid: {}, nickname: {}, 可用状态: {}, 最大接待数: {}, 查询耗时:
+            // {}ms",
+            // agent.getUid(), agent.getNickname(), agent.isAvailable(),
+            // agent.getMaxThreadCount(), System.currentTimeMillis() - startTime);
+            return agent;
+
+        } catch (IllegalArgumentException e) {
+            log.error("客服实体获取失败，参数错误 - agentUid: {}, 错误: {}", agentUid, e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            // log.error("客服实体获取失败，系统异常 - agentUid: {}, 错误: {}, 耗时: {}ms",
+            // agentUid, e.getMessage(), System.currentTimeMillis() - startTime, e);
+            throw new RuntimeException("Failed to get agent entity: " + agentUid, e);
+        }
+    }
+
+    /**
+     * 获取客服欢迎消息
+     */
+    private boolean isDraftEnabled(VisitorRequest visitorRequest) {
+        return visitorRequest != null && Boolean.TRUE.equals(visitorRequest.getDraft());
+    }
+
+    private String getAgentWelcomeMessage(VisitorRequest visitorRequest, AgentEntity agent) {
+        log.debug("获取客服欢迎消息 - agentUid: {}", agent.getUid());
+
+        String customMessage = null;
+        try {
+            boolean useDraft = isDraftEnabled(visitorRequest);
+            if (agent.getSettings() != null) {
+                if (useDraft && agent.getSettings().getDraftServiceSettings() != null) {
+                    customMessage = agent.getSettings().getDraftServiceSettings().getWelcomeTip();
+                }
+                if (!StringUtils.hasText(customMessage) && agent.getSettings().getServiceSettings() != null) {
+                    customMessage = agent.getSettings().getServiceSettings().getWelcomeTip();
+                }
+            }
+            log.debug("客服自定义欢迎消息 - agentUid: {}, 消息长度: {}",
+                    agent.getUid(), customMessage != null ? customMessage.length() : 0);
+        } catch (Exception e) {
+            log.warn("获取客服自定义欢迎消息失败 - agentUid: {}, 错误: {}", agent.getUid(), e.getMessage());
+        }
+
+        String welcomeMessage = getValidWelcomeMessage(customMessage);
+        log.info("客服欢迎消息获取完成 - agentUid: {}, 最终消息长度: {}",
+                agent.getUid(), welcomeMessage != null ? welcomeMessage.length() : 0);
+        return welcomeMessage;
+    }
+
+    /**
+     * 获取客服离线消息
+     */
+    private String getAgentOfflineMessage(VisitorRequest visitorRequest, AgentEntity agent) {
+        log.debug("获取客服离线消息 - agentUid: {}", agent.getUid());
+
+        // 非工作时间提示优先
+        if (!resolveIsInServiceTime(visitorRequest, agent)) {
+            WorktimeSettingEntity worktimeSettings = resolveEffectiveWorktimeSettings(visitorRequest, agent);
+            if (worktimeSettings != null && StringUtils.hasText(worktimeSettings.getNonWorktimeTip())) {
+                return worktimeSettings.getNonWorktimeTip();
+            }
+        }
+
+        String customMessage = null;
+        try {
+            boolean useDraft = isDraftEnabled(visitorRequest);
+            if (agent.getSettings() != null) {
+                if (useDraft && agent.getSettings().getDraftMessageLeaveSettings() != null) {
+                    customMessage = agent.getSettings().getDraftMessageLeaveSettings().getMessageLeaveTip();
+                }
+                if (!StringUtils.hasText(customMessage) && agent.getSettings().getMessageLeaveSettings() != null) {
+                    customMessage = agent.getSettings().getMessageLeaveSettings().getMessageLeaveTip();
+                }
+            }
+            log.debug("客服自定义离线消息 - agentUid: {}, 消息长度: {}",
+                    agent.getUid(), customMessage != null ? customMessage.length() : 0);
+        } catch (Exception e) {
+            log.warn("获取客服自定义离线消息失败 - agentUid: {}, 错误: {}", agent.getUid(), e.getMessage());
+        }
+
+        String offlineMessage = getValidOfflineMessage(customMessage);
+        log.info("客服离线消息获取完成 - agentUid: {}, 最终消息长度: {}",
+                agent.getUid(), offlineMessage != null ? offlineMessage.length() : 0);
+        return offlineMessage;
+    }
+
+    private boolean resolveIsInServiceTime(VisitorRequest visitorRequest, AgentEntity agentEntity) {
+        WorktimeSettingEntity effective = worktimeSettingsResolver.resolve(visitorRequest,
+                agentEntity.getSettings());
+        return worktimeService.isInServiceTime(effective);
+    }
+
+    private WorktimeSettingEntity resolveEffectiveWorktimeSettings(VisitorRequest visitorRequest,
+            AgentEntity agentEntity) {
+        return worktimeSettingsResolver.resolve(visitorRequest, agentEntity.getSettings());
+    }
+
+    /**
+     * 获取客服排队配置
+     */
+    private QueueSettingsEntity getAgentQueueSettings(VisitorRequest visitorRequest, AgentEntity agent) {
+        if (agent.getSettings() == null) {
+            return null;
+        }
+        boolean useDraft = isDraftEnabled(visitorRequest);
+        if (useDraft && agent.getSettings().getDraftQueueSettings() != null) {
+            return agent.getSettings().getDraftQueueSettings();
+        }
+        QueueSettingsEntity settings = agent.getSettings().getQueueSettings();
+        if (settings == null) {
+            settings = agent.getSettings().getDraftQueueSettings();
+        }
+        return settings;
+    }
+
+    private boolean shouldForceLeaveMessage(QueueEntity queue, QueueSettingsEntity settings) {
+        if (queue == null) {
+            return false;
+        }
+        int limit = resolveMaxWaiting(settings);
+        return limit > 0 && queue.getQueuingCount() >= limit;
+    }
+
+    private int resolveMaxWaiting(QueueSettingsEntity settings) {
+        if (settings == null) {
+            return QueueSettingsEntity.DEFAULT_MAX_WAITING;
+        }
+        return settings.resolveMaxWaiting();
+    }
+
+    /**
+     * 生成客服排队消息（使用模板）
+     * 
+     * @param agent                客服实体
+     * @param queuingCount         当前排队人数
+     * @param avgWaitTimePerPerson 每人平均等待时长（秒）
+     * @return 替换模板变量后的排队提示语
+     */
+    private String generateAgentQueueMessage(VisitorRequest visitorRequest, AgentEntity agent, int queuingCount,
+            int avgWaitTimePerPerson) {
+        log.debug("开始生成客服排队消息 - agentUid: {}, 排队数: {}", agent.getUid(), queuingCount);
+
+        QueueSettingsEntity queueSettings = getAgentQueueSettings(visitorRequest, agent);
+        if (queueSettings != null && StringUtils.hasText(queueSettings.getQueueTip())) {
+            log.debug("使用自定义排队提示语模板 - agentUid: {}, 模板: {}", agent.getUid(), queueSettings.getQueueTip());
+        }
+
+        // 使用模板工具类解析并替换变量
+        String queueMessage = QueueTipTemplateUtils.resolveTemplate(
+                queueSettings,
+                queuingCount, // position = 排队人数（前面的人）
+                queuingCount, // queueSize = 当前队列总人数
+                avgWaitTimePerPerson);
+
+        log.info("客服排队消息生成完成 - agentUid: {}, 排队数: {}, 消息: {}",
+                agent.getUid(), queuingCount, queueMessage);
+        return queueMessage;
+    }
+
+    /**
+     * 更新队列成员接受状态
+     */
+    private void updateQueueMemberForAcceptance(QueueMemberEntity queueMemberEntity) {
+        // long startTime = System.currentTimeMillis();
+        log.debug("开始更新队列成员接受状态 - queueMemberUid: {}, threadUid: {}",
+                queueMemberEntity.getUid(), queueMemberEntity.getThread().getUid());
+
+        ZonedDateTime acceptTime = BdDateUtils.now();
+        queueMemberEntity.setAgentAcceptedAt(acceptTime);
+        queueMemberEntity.setAgentAcceptType(QueueMemberAcceptTypeEnum.AUTO.name());
+
+        log.debug("设置队列成员接受状态 - queueMemberUid: {}, 接受时间: {}, 接受类型: {}",
+                queueMemberEntity.getUid(), acceptTime, QueueMemberAcceptTypeEnum.AUTO.name());
+
+        queueMemberRestService.saveAsyncBestEffort(queueMemberEntity);
+    }
+
+    /**
+     * 发布线程相关事件
+     */
+    private void publishThreadEvents(ThreadEntity savedThread) {
+        log.debug("开始发布线程相关事件 - threadUid: {}, 状态: {}", savedThread.getUid(), savedThread.getStatus());
+
+        try {
+            // 同步订阅 topic（含 internal），避免首条消息因订阅延迟而丢失
+            subscribeThreadTopics(savedThread, topicSubscriptionRestService);
+
+            // 发布线程处理创建事件
+            log.debug("发布ThreadProcessCreateEvent事件 - threadUid: {}", savedThread.getUid());
+            bytedeskEventPublisher.publishEvent(new ThreadProcessCreateEvent(this, savedThread));
+        } catch (Exception e) {
+            log.error("发布线程事件失败 - threadUid: {}, 错误信息: {}", savedThread.getUid(), e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * 获取客服继续对话消息
+     */
+    private MessageProtobuf getAgentContinueMessage(ThreadEntity thread) {
+        log.debug("生成客服继续对话消息 - threadUid: {}", thread.getUid());
+
+        UserProtobuf user = thread.getAgentProtobuf();
+        if (user == null) {
+            log.warn("线程中未找到客服信息 - threadUid: {}", thread.getUid());
+            throw new IllegalStateException("Thread agent protobuf is null");
+        }
+
+        log.info("客服继续对话消息生成完成 - threadUid: {}, agentUid: {}, agentNickname: {}",
+                thread.getUid(), user.getUid(), user.getNickname());
+        return ThreadMessageUtil.getThreadContinueMessage(user, thread);
+    }
+
+    /**
+     * 获取客服排队消息
+     */
+    private MessageProtobuf getAgentQueueMessage(ThreadEntity thread) {
+        log.debug("生成客服排队消息 - threadUid: {}", thread.getUid());
+
+        // 线程content 可能为 ThreadContent JSON（payload 才是 QueueContent JSON）；尝试解析，否则构造最小
+        // QueueContent
+        QueueContent queueContent = null;
+        try {
+            ThreadContent tc = ThreadContent.fromStored(thread.getContent());
+            String payload = tc != null ? tc.getPayload() : thread.getContent();
+            if (payload != null && payload.trim().startsWith("{")) {
+                queueContent = com.alibaba.fastjson2.JSON.parseObject(payload, QueueContent.class);
+            }
+        } catch (Exception e) {
+            log.debug("解析线程排队内容失败，使用降级模式 - threadUid: {}, error: {}", thread.getUid(), e.getMessage());
+        }
+        if (queueContent == null) {
+            queueContent = QueueContent.builder()
+                    .content("正在排队，请稍候...")
+                    .serverTimestamp(System.currentTimeMillis())
+                    .build();
+        }
+        return ThreadMessageUtil.getThreadQueueMessage(queueContent, thread);
+    }
+
+}

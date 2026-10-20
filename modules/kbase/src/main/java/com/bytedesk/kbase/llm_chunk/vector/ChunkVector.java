@@ -1,0 +1,201 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-05-14 14:18:55
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-07-03 20:09:07
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.llm_chunk.vector;
+
+import java.util.List;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.elasticsearch.annotations.Document;
+import org.springframework.data.elasticsearch.annotations.Field;
+import org.springframework.data.elasticsearch.annotations.FieldType;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.kbase.llm_chunk.ChunkEntity;
+import com.bytedesk.kbase.translation.KbaseTranslationEntity;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * Chunk向量索引实体类
+ * 用于在Elasticsearch中存储Chunk的向量表示
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@Document(indexName = "bytedesk_chunk_vector")
+public class ChunkVector {
+    
+    @Id
+    private String uid;
+    
+    @Field(type = FieldType.Text)
+    private String name;
+    
+    @Field(type = FieldType.Text)
+    private String content;
+    
+    @Field(type = FieldType.Keyword)
+    private String type;
+    
+    @Field(type = FieldType.Keyword)
+    private List<String> tagList;
+    
+    @Field(type = FieldType.Keyword)
+    private String orgUid;
+    
+    @Field(type = FieldType.Keyword)
+    private String kbUid;
+
+    @Field(type = FieldType.Keyword)
+    private String sourceUid;
+    
+    @Field(type = FieldType.Keyword)
+    private String categoryUid;
+    
+    @Field(type = FieldType.Boolean)
+    private Boolean enabled;
+
+    @Field(type = FieldType.Keyword)
+    private String language;
+
+    @Field(type = FieldType.Keyword)
+    private String sourceLanguage;
+
+    @Field(type = FieldType.Boolean)
+    private Boolean translated;
+
+    // 向量嵌入存储
+    @Field(type = FieldType.Dense_Vector, dims = 1536)
+    private float[] contentEmbedding;
+    
+    // 文档ID
+    @Field(type = FieldType.Keyword)
+    private String docId;
+
+    // 文件ID
+    @Field(type = FieldType.Keyword)
+    private String fileUid;
+    
+    // 文件名
+    @Field(type = FieldType.Keyword)
+    private String fileName;
+    
+    // 文件链接
+    @Field(type = FieldType.Keyword)
+    private String fileUrl;
+    
+    // @Field(type = FieldType.Date, format = DateFormat.date_hour_minute_second_millis)
+    // private ZonedDateTime startDate;
+
+    // @Field(type = FieldType.Date, format = DateFormat.date_hour_minute_second_millis)
+    // private ZonedDateTime endDate;
+    
+    // 状态字段
+    @Field(type = FieldType.Keyword)
+    private String status;
+    
+    @Field(type = FieldType.Keyword)
+    private String vectorStatus;
+    
+    /**
+     * 从ChunkEntity创建ChunkVector实体的静态方法
+     * 注意：向量嵌入需要单独计算并设置
+     */
+    public static ChunkVector fromChunkEntity(ChunkEntity chunk) {
+        String kbUid = (chunk.getKbase() != null) ? chunk.getKbase().getUid() : null;
+        if (!StringUtils.hasText(kbUid)) {
+            throw new IllegalArgumentException("kbUid is required for vectorizing chunk uid=" + chunk.getUid());
+        }
+
+        String fileUid = null;
+        String fileName = null;
+        String fileUrl = null;
+
+        if (chunk.getFile() != null) {
+            fileUid = chunk.getFile().getUid();
+            fileName = chunk.getFile().getFileName();
+            fileUrl = chunk.getFile().getFileUrl();
+        }
+        
+        return ChunkVector.builder()
+            .uid(chunk.getUid())
+            .name(chunk.getName())
+            .content(chunk.getContent())
+            .type(chunk.getType())
+            .tagList(chunk.getTagList())
+            .orgUid(chunk.getOrgUid())
+            .kbUid(kbUid)
+            .sourceUid(chunk.getUid())
+            .categoryUid(chunk.getCategoryUid())
+            .enabled(chunk.getEnabled())
+            .language(chunk.getKbase() != null ? chunk.getKbase().getSourceLanguage() : null)
+            .sourceLanguage(chunk.getKbase() != null ? chunk.getKbase().getSourceLanguage() : null)
+            .translated(false)
+            .docId(chunk.getDocId())
+            .fileUid(fileUid)
+            .fileName(fileName)
+            .fileUrl(fileUrl)
+            // .startDate(chunk.getStartDate())
+            // .endDate(chunk.getEndDate())
+            .status(chunk.getElasticStatus())
+            .vectorStatus(chunk.getVectorStatus())
+            .build();
+    }
+
+    public static ChunkVector fromTranslation(ChunkEntity chunk, KbaseTranslationEntity translation) {
+        String kbUid = (chunk.getKbase() != null) ? chunk.getKbase().getUid() : null;
+        if (!StringUtils.hasText(kbUid)) {
+            throw new IllegalArgumentException("kbUid is required for vectorizing translated chunk uid=" + chunk.getUid());
+        }
+
+        String fileUid = null;
+        String fileName = null;
+        String fileUrl = null;
+        if (chunk.getFile() != null) {
+            fileUid = chunk.getFile().getUid();
+            fileName = chunk.getFile().getFileName();
+            fileUrl = chunk.getFile().getFileUrl();
+        }
+
+        String targetLanguage = StringUtils.hasText(translation.getTargetLanguage())
+                ? translation.getTargetLanguage().trim().toUpperCase()
+                : (chunk.getKbase() != null ? chunk.getKbase().getSourceLanguage() : null);
+
+        return ChunkVector.builder()
+                .uid(translation.getUid())
+                .name(StringUtils.hasText(translation.getTitle()) ? translation.getTitle() : chunk.getName())
+                .content(StringUtils.hasText(translation.getContent()) ? translation.getContent() : translation.getSummary())
+                .type(chunk.getType())
+                .tagList(translation.getTagList() == null || translation.getTagList().isEmpty() ? chunk.getTagList() : translation.getTagList())
+                .orgUid(chunk.getOrgUid())
+                .kbUid(kbUid)
+                .sourceUid(chunk.getUid())
+                .categoryUid(chunk.getCategoryUid())
+                .enabled(Boolean.TRUE.equals(translation.getEnabled()) && Boolean.TRUE.equals(chunk.getEnabled()))
+                .language(targetLanguage)
+                .sourceLanguage(chunk.getKbase() != null ? chunk.getKbase().getSourceLanguage() : null)
+                .translated(true)
+                .docId(translation.getUid())
+                .fileUid(fileUid)
+                .fileName(fileName)
+                .fileUrl(fileUrl)
+                .status(chunk.getElasticStatus())
+                .vectorStatus(chunk.getVectorStatus())
+                .build();
+    }
+}

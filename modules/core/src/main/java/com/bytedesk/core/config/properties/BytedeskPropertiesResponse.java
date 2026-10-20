@@ -1,0 +1,261 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-02-07 20:45:09
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-28 09:08:05
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.config.properties;
+
+import java.io.Serializable;
+
+import com.bytedesk.core.constant.BytedeskConsts;
+
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
+public class BytedeskPropertiesResponse implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    private Boolean debug;
+    private String version; 
+    /**
+     * 明文许可证摘要（服务端验签后的结论），供前端门控直接读取，无需解密。
+     * 字段缺失/valid=false 时前端应回退为社区版展示。
+     */
+    private License license;
+
+    // 
+    private Custom custom;
+    private Features features;
+    private Testing testing;
+    private Organization organization;
+    private Service service;
+    private Ai ai;
+    private Call call;
+    /** 文件预览（Office 转 PDF）能力配置，供前端门控预览按钮显隐 */
+    private Preview preview;
+    /** 平台客服（访客端纠纷介入通道）配置，供 visitor 工具栏按钮显隐与路由 */
+    private PlatformService platformService;
+
+    @Getter
+    @Setter
+    public static class License {
+        /** 许可证记录 uid（新格式 licenseKey 载荷末尾携带；旧格式许可证为空字符串） */
+        private String uid = "";
+        /** COMMUNITY / ENTERPRISE / PLATFORM */
+        private String edition;
+        /** 到期日期 yyyy-MM-dd，空表示未解析到 */
+        private String expiryDate;
+        /** 服务端验签结论：签名有效且未过期 */
+        private Boolean valid = false;
+        /** free / paid */
+        private String userType;
+        /** 被授权人 */
+        private String name = "";
+        /** 授权描述 */
+        private String description = "";
+        /** 授权服务器 IP 列表 */
+        private java.util.List<String> serverIps = new java.util.ArrayList<>();
+        /** 授权域名列表 */
+        private java.util.List<String> serverDomains = new java.util.ArrayList<>();
+    }
+
+    @Getter
+    @Setter
+    public static class Custom {
+        private Boolean enabled;
+        private Boolean bndEnabled = false;
+        private String name;
+        private String logo;
+        private String favicon;
+        private String description;
+        /**
+         * 外网可访问的上传 API 地址（完整URL，不带上传路径），用于反向代理/多节点场景。
+         */
+        private String uploadApiUrl;
+        /**
+         * 外网可访问的 MQTT WebSocket 地址（完整URL），用于反向代理场景。
+         */
+        private String mqttWebsocketUrl;
+        private Boolean showRightCornerChat;
+        private String rightCornerChatPlacement; // 位置：bottom-right / bottom-left
+        private Boolean showDemo = true; // 是否显示演示
+        private String privacyPolicyUrl;
+        private String termsOfServiceUrl;
+        private Boolean loginUsernameEnable = true;
+        private Boolean login2faEnable = false;
+        private Integer loginMaxRetryCount = 3;
+        private Integer loginMaxRetryLockTime = 10;
+        private Boolean loginMobileEnable = true;
+        // private Boolean loginEmailEnable = false;
+        private Boolean loginScanEnable = false;
+        private Boolean loginWechatEnable = false;
+        private Boolean loginGithubEnable = false;
+        private Boolean loginFacebookEnable = false;
+        private Boolean loginGoogleEnable = false;
+        /** OIDC 标准登录开关（企业模块 /auth/oidc/*），登录页据此显示 OIDC 按钮 */
+        private Boolean loginOidcEnable = false;
+        /** CAS 单点登录开关（企业模块 /auth/cas/*），登录页据此显示 CAS 按钮 */
+        private Boolean loginCasEnable = false;
+        /** 钉钉登录开关（企业模块 /auth/dingtalk/*） */
+        private Boolean loginDingtalkEnable = false;
+        /** 抖音登录开关（企业模块 /auth/douyin/*） */
+        private Boolean loginDouyinEnable = false;
+        /** 飞书登录开关（企业模块 /auth/feishu/*） */
+        private Boolean loginFeishuEnable = false;
+        /** LDAP 目录登录开关（企业模块 /auth/ldap/*，用户名密码表单） */
+        private Boolean loginLdapEnable = false;
+        /** OpenID 通用登录开关（企业模块 /auth/openid/*，自配置端点） */
+        private Boolean loginOpenidEnable = false;
+        private Boolean docUrlShow = true;
+        private String docUrl;
+        /** 是否显示 admin 管理后台帮助文档按钮（HelpDocButton），默认不显示，明确开启才显示 */
+        private Boolean helpDocButtonEnabled = false;
+        // default lang: en-US, zh-CN, zh-TW
+        private String lang = "zh-CN";
+        /** 是否显示注册按钮（仅控制登录页注册入口显隐，不拦截注册接口） */
+        private Boolean showRegisterButton;
+        private Boolean autoRegisterOnLogin;
+        private Boolean forceValidateMobile;
+        private Boolean forceValidateEmail;
+        private Boolean forceVisitorAuth; // 是否强制访客认证，默认false
+        private Boolean wechatMpSubscribePromptEnabled = false;
+        private String wechatMpSubscribePromptAppId;
+        private String defaultLlmPrompt;
+
+        /**
+         * 兼容旧前端构建产物读取 custom.allowRegister 字段（与 showRegisterButton 同值下发）。
+         * @deprecated 请使用 showRegisterButton
+         */
+        @Deprecated
+        public Boolean getAllowRegister() {
+            return showRegisterButton;
+        }
+    }
+
+    @Getter
+    @Setter
+    private static class Testing {
+        private Boolean enabled = false;
+        // private Integer accountCount = 300;
+        // private String accountUsername = "test_username";
+        // private String accountPassword = "password";
+        private Boolean disableCaptcha = false;
+        private Boolean disableIpFilter = false;
+    }
+
+    @Getter
+    @Setter
+    public static class Features {
+        // private Integer freeDays = 30;
+        private String avatarBaseUrl;
+    }
+
+    @Getter
+    @Setter
+    public static class Organization {
+        private String name;
+        private String code;
+        private Boolean allowCreateOrg = true;
+        private Boolean allowJoinOrg = true;
+        private Integer defaultVipLevel = 0;
+        private Integer defaultVipDays = 365;
+        private Integer defaultMaxMembers = 20;
+        private Integer defaultMaxAgents = 20;
+        private Integer defaultMaxWorkgroups = 20;
+    }
+
+    @Getter
+    @Setter
+    public static class Service {
+        private Boolean agentSeatEnabled = false;
+    }
+
+    /**
+     * 平台客服配置（访客端纠纷介入通道）。
+     * 默认值为代码常量（不新增 properties 键）；DB 覆盖值经 SystemConfig 下发链路合并。
+     * 仅 enabled=true 时访客端显示「平台客服」按钮。
+     */
+    @Getter
+    @Setter
+    public static class PlatformService {
+        /** 是否启用平台客服入口（platform_service.enabled，默认 false） */
+        private Boolean enabled = false;
+        /** 平台客服组织 UID（platform_service.orgUid，默认 df_org_uid） */
+        private String orgUid = BytedeskConsts.DEFAULT_ORGANIZATION_UID;
+        /** 平台客服工作组 UID（platform_service.workgroupUid，默认 df_wg_uid） */
+        private String workgroupUid = BytedeskConsts.DEFAULT_WORKGROUP_UID;
+    }
+
+    /**
+     * 文件预览（Office 转 PDF）配置。
+     * 前端门控公式：license（企业/平台且有效） && preview.enabled && preview.available。
+     * fail-closed：字段缺失时前端应视为 false（不显示预览按钮）。
+     */
+    @Getter
+    @Setter
+    public static class Preview {
+        /** 是否启用 Office 转 PDF（bytedesk.preview.convert.enabled，默认 false） */
+        private Boolean enabled = false;
+        /** 转换模式 local / remote（bytedesk.preview.convert.mode，默认 local） */
+        private String mode = "local";
+        /**
+         * 转换能力是否可用：
+         * local 模式 → 探测到 LibreOffice 安装目录；
+         * remote 模式 → gotenberg remote-url 已配置
+         */
+        private Boolean available = false;
+    }
+
+    @Getter
+    @Setter
+    public static class Ai {
+        // bytedesk.ai.* 聚合后的应用默认值，供前端表单和执行接口共享。
+        private Tts tts;
+        private Asr asr;
+    }
+
+    @Getter
+    @Setter
+    public static class Call {
+        private Freeswitch freeswitch;
+    }
+
+    @Getter
+    @Setter
+    public static class Freeswitch {
+        private String recordingsBaseUrl;
+    }
+
+    @Getter
+    @Setter
+    public static class Tts {
+        private String provider;
+        private String model;
+        private String voice;
+        private String language;
+        private String audioFormat;
+    }
+
+    @Getter
+    @Setter
+    public static class Asr {
+        private String provider;
+        private String model;
+        private String realtimeModel;
+        private String sourceFormat;
+        private Long timeoutMs;
+        private Long pollIntervalMs;
+    }
+    
+}

@@ -1,0 +1,365 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-14 23:02:54
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.message;
+
+import java.time.ZonedDateTime;
+import java.util.List;
+import java.util.Optional;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+// import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Recover;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import com.bytedesk.core.base.BaseRestService;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.exception.CommonI18nExceptions;
+import com.bytedesk.core.exception.ResourceI18nExceptions;
+import com.bytedesk.core.message.enums.MessageStatusEnum;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.utils.ConvertUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class MessageRestService extends BaseRestService<MessageEntity, MessageRequest, MessageResponse> {
+
+    private final MessageRepository messageRepository;
+
+    private final AuthService authService;
+
+    public Page<MessageEntity> queryByOrgEntity(MessageRequest request) {
+        // 非超级管理员请求如果未传 orgUid，默认使用当前用户的 orgUid，避免抛异常导致 500
+        if (!StringUtils.hasText(request.getOrgUid())) {
+            UserEntity user = authService.getUser();
+            if (user != null && StringUtils.hasText(user.getOrgUid())) {
+                request.setOrgUid(user.getOrgUid());
+            }
+        }
+        Pageable pageable = request.getPageable();
+        Specification<MessageEntity> specs = MessageSpecification.search(request, authService);
+        return messageRepository.findAll(specs, pageable);
+    }
+
+    public Page<MessageResponse> queryByOrg(MessageRequest request) {
+        Page<MessageEntity> messagePage = queryByOrgEntity(request);
+        return messagePage.map(this::convertToResponse);
+    }
+
+    @Override
+    public Page<MessageResponse> queryByUser(MessageRequest request) {
+        UserEntity user = authService.getUser();
+        if (user == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+        request.setUserUid(user.getUid());
+        //
+        return queryByOrg(request);
+    }
+
+    @Override
+    public MessageResponse queryByUid(MessageRequest request) {
+        Optional<MessageEntity> optional = findByUid(request.getUid());
+        if (!optional.isPresent()) {
+            throw ResourceI18nExceptions.messageNotFound();
+        }
+        return convertToResponse(optional.get());
+    }
+
+    // 不能使用 @Cacheable 注解，否则会无法更新已读状态
+    // @Cacheable(value = "message", key = "#uid", unless = "#result == null")
+    public Optional<MessageEntity> findByUid(String uid) {
+        return messageRepository.findByUid(uid);
+    }
+
+    // @Cacheable(value = "message", key = "#type + #messageUid", unless = "#result == null")
+    public Optional<MessageEntity> findTransferMessage(String type, String messageUid) {
+        return messageRepository.findTransferMessage(type, messageUid);
+    }
+
+    // @Cacheable(value = "message", key = "#threadUid", unless = "#result == null")
+    public Optional<MessageEntity> findLatestByThreadUid(String threadUid) {
+        return messageRepository.findFirstByThread_UidOrderByCreatedAtDesc(threadUid);
+    }
+
+    public Optional<MessageEntity> findLatestByThreadTopic(String threadTopic) {
+        return messageRepository.findFirstByThread_TopicOrderByCreatedAtDesc(threadTopic);
+    }
+
+    // @Cacheable(value = "message", key = "#threadUid", unless = "#result == null")
+    public List<MessageEntity> findByThreadUid(String threadUid) {
+        return messageRepository.findByThread_UidOrderByCreatedAtAsc(threadUid);
+    }
+
+    /**
+     * 查询会话在指定时间窗口内的消息（闭区间）。
+     */
+    public List<MessageEntity> findByThreadUidBetweenCreatedAt(String threadUid, ZonedDateTime start,
+            ZonedDateTime end) {
+        return messageRepository.findByThread_UidAndCreatedAtBetweenOrderByCreatedAtAsc(threadUid, start, end);
+    }
+
+    public List<MessageEntity> findByThreadTopicBetweenCreatedAt(String threadTopic, ZonedDateTime start,
+            ZonedDateTime end) {
+        return messageRepository.findByThread_TopicAndCreatedAtBetweenOrderByCreatedAtAsc(threadTopic, start, end);
+    }
+    
+    // @Cacheable(value = "message", key = "#threadUid + #type + #userUid", unless = "#result == null")
+    public Optional<MessageEntity> findByThreadUidAndTypeAndUserContains(String threadUid, String type,
+            String userUid) {
+        return messageRepository.findFirstByThread_UidAndTypeAndUserContainsOrderByCreatedAtDesc(threadUid, type,
+                userUid);
+    }
+
+    // @Cacheable(value = "message", key = "#threadTopic + #limit", unless = "#result == null")
+    public List<MessageEntity> getRecentMessages(String threadTopic, int limit) {
+        // 只返回前5条记录
+        PageRequest pageRequest = PageRequest.of(0, limit);
+        return messageRepository.findLatestByThreadTopicOrderByCreatedAtDesc(threadTopic, pageRequest);
+        // return messageEntities.stream().map(MessageProtobuf::convertToProtobuf).collect(Collectors.toList());
+    }
+
+    /**
+     * 统计同事(MEMBER)会话“对我的未读消息数”（跨正反两个 topic 聚合）。
+     * 详见 {@link MessageRepository#countMemberUnreadByTopics} 的口径说明。
+     */
+    public long countMemberUnreadByTopics(String topic, String reverseTopic, String ownerUserUid) {
+        return messageRepository.countMemberUnreadByTopics(topic, reverseTopic, ownerUserUid);
+    }
+
+    // @Cacheable(value = "message", key = "#uid", unless = "#result == null")
+    public Boolean isMessageExists(String uid) {
+        return messageRepository.existsByUid(uid);
+    }
+
+    @Override
+    public MessageResponse create(MessageRequest request) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'create'");
+    }
+
+    @Override
+    public MessageResponse update(MessageRequest request) {
+        UserEntity user = authService.getUser();
+        if (user == null || !StringUtils.hasText(user.getUid())) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+
+        MessageEntity entity = findByUid(request.getUid())
+                .orElseThrow(ResourceI18nExceptions::messageNotFound);
+
+        if (request.getContent() != null) {
+            entity.setContent(request.getContent());
+        }
+        if (StringUtils.hasText(request.getType())) {
+            entity.setType(request.getType());
+        }
+
+        MessageEntity savedEntity = save(entity);
+        if (savedEntity == null) {
+            throw new RuntimeException(I18Consts.I18N_UPDATE_FAILED);
+        }
+        return convertToResponse(savedEntity);
+    }
+
+    @Override
+    // @CachePut(value = "message", key = "#message.uid")
+    protected MessageEntity doSave(MessageEntity entity) {
+        return messageRepository.save(entity);
+    }
+
+    @Recover
+    public MessageEntity recover(ObjectOptimisticLockingFailureException e, MessageEntity entity) {
+        return handleOptimisticLockingFailureException(e, entity);
+    }
+
+    @Recover
+    public MessageEntity recover(DataIntegrityViolationException e, MessageEntity entity) {
+        if (entity != null && StringUtils.hasText(entity.getUid()) && messageRepository.existsByUid(entity.getUid())) {
+            log.info("message save duplicate detected after concurrent insert, treat as success, uid: {}", entity.getUid());
+            return messageRepository.findByUid(entity.getUid()).orElse(entity);
+        }
+        throw e;
+    }
+
+    @Caching(evict = {
+            @CacheEvict(value = "message", key = "#message.uid"),
+    })
+    public void delete(MessageRequest message) {
+        deleteByUid(message.getUid());
+    }
+
+    @Caching(evict = {
+            @CacheEvict(value = "message", key = "#uid"),
+    })
+    public void deleteByUid(String uid) {
+        // messageRepository.deleteByUid(uid);
+        Optional<MessageEntity> messageOptional = findByUid(uid);
+        messageOptional.ifPresent(message -> {
+            message.setDeleted(true);
+            save(message);
+        });
+    }
+
+    public MessageResponse restore(MessageRequest request) {
+        MessageEntity entity = messageRepository.findByUid(request.getUid())
+                .orElseThrow(ResourceI18nExceptions::messageNotFound);
+        entity.setDeleted(false);
+        return convertToResponse(save(entity));
+    }
+
+    public Boolean existsByUid(String uid) {
+        return messageRepository.existsByUid(uid);
+    }
+
+    @Override
+    public MessageResponse convertToResponse(MessageEntity entity) {
+        return ConvertUtils.convertToMessageResponse(entity);
+    }
+
+    @Override
+    public MessageEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            MessageEntity entity) {
+        // Retry up to 3 times with fresh data to resolve concurrent updates
+        int maxRetries = 3;
+        for (int attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                Optional<MessageEntity> latest = messageRepository.findByUid(entity.getUid());
+                if (latest.isPresent()) {
+                    MessageEntity latestEntity = latest.get();
+                    String mergedStatus = mergeRecoverableStatus(latestEntity.getStatus(), entity.getStatus());
+                    log.warn(
+                            "message optimistic lock recovery (attempt {}): uid {}, requestedStatus {}, latestStatusBeforeMerge {}, mergedStatus {}",
+                            attempt + 1, entity.getUid(), entity.getStatus(), latestEntity.getStatus(), mergedStatus);
+                    latestEntity.setStatus(mergedStatus);
+                    return messageRepository.save(latestEntity);
+                }
+            } catch (ObjectOptimisticLockingFailureException retryEx) {
+                if (attempt < maxRetries - 1) {
+                    log.warn("Optimistic lock recovery retry {} failed for uid {}, retrying...",
+                            attempt + 1, entity.getUid());
+                    // Brief pause to let concurrent transactions complete
+                    try {
+                        Thread.sleep(50L * (attempt + 1));
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                } else {
+                    log.error("Optimistic lock recovery exhausted after {} attempts for uid {}: {}",
+                            maxRetries, entity.getUid(), retryEx.getMessage());
+                }
+            } catch (Exception ex) {
+                log.error("Unexpected error during optimistic lock recovery for uid {}: {}",
+                        entity.getUid(), ex.getMessage());
+                break;
+            }
+        }
+        // After exhausting retries, return null to avoid propagating the error.
+        // The caller (Spring Retry @Recover) will receive null, and the original save
+        // operation will not be retried further — the entity state will be reconciled
+        // on the next write.
+        log.warn("Optimistic lock recovery could not save entity uid {}, returning null", entity.getUid());
+        return null;
+    }
+
+    private String mergeRecoverableStatus(String latestStatus, String requestedStatus) {
+        if (!StringUtils.hasText(requestedStatus)) {
+            return latestStatus;
+        }
+        if (!StringUtils.hasText(latestStatus)) {
+            return requestedStatus;
+        }
+
+        try {
+            MessageStatusEnum latest = MessageStatusEnum.fromValue(latestStatus);
+            MessageStatusEnum requested = MessageStatusEnum.fromValue(requestedStatus);
+
+            if (isDeliveryStatusRegression(latest, requested)) {
+                return latest.name();
+            }
+            return requested.name();
+        } catch (IllegalArgumentException ex) {
+            return requestedStatus;
+        }
+    }
+
+    private boolean isDeliveryStatusRegression(MessageStatusEnum latest, MessageStatusEnum requested) {
+        if (latest == requested) {
+            return false;
+        }
+        if (latest == MessageStatusEnum.READ) {
+            return requested == MessageStatusEnum.SENDING
+                    || requested == MessageStatusEnum.SUCCESS
+                    || requested == MessageStatusEnum.DELIVERED;
+        }
+        if (latest == MessageStatusEnum.DELIVERED) {
+            return requested == MessageStatusEnum.SENDING
+                    || requested == MessageStatusEnum.SUCCESS;
+        }
+        if (latest == MessageStatusEnum.SUCCESS) {
+            return requested == MessageStatusEnum.SENDING;
+        }
+        return false;
+    }
+
+    /**
+     * 标记消息为已读
+     * 
+     * @param messageUid 消息UID
+     * @return 更新后的消息响应
+     * @deprecated 此功能已迁移到企业版
+     */
+    @Deprecated
+    @CachePut(value = "message", key = "#messageUid")
+    public MessageResponse markAsRead(String messageUid) {
+        // 此功能已迁移到企业版
+        throw new UnsupportedOperationException("此功能已迁移到企业版，请使用 MessageRestServiceVip.markAsRead");
+    }
+
+    /**
+     * 批量标记会话中所有消息为已读
+     * 
+     * @param threadUid 会话UID
+     * @return 更新的消息数量
+     * @deprecated 此功能已迁移到企业版
+     */
+    @Deprecated
+    @CacheEvict(value = "message", allEntries = true)
+    public Integer markThreadAsRead(String threadUid) {
+        // 此功能已迁移到企业版
+        throw new UnsupportedOperationException("此功能已迁移到企业版，请使用 MessageRestServiceVip.markThreadAsRead");
+    }
+
+    @Override
+    protected Specification<MessageEntity> createSpecification(MessageRequest request) {
+        return MessageSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<MessageEntity> executePageQuery(Specification<MessageEntity> spec, Pageable pageable) {
+        return messageRepository.findAll(spec, pageable);
+    }
+
+}

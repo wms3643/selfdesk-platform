@@ -1,0 +1,175 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-05-14 14:13:52
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-07-03 20:08:00
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.llm_faq.vector;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import org.springframework.data.annotation.Id;
+
+import org.springframework.data.elasticsearch.annotations.Document;
+import org.springframework.data.elasticsearch.annotations.Field;
+import org.springframework.data.elasticsearch.annotations.FieldType;
+import org.springframework.util.StringUtils;
+
+import com.bytedesk.kbase.llm_faq.FaqEntity;
+import com.bytedesk.kbase.translation.KbaseTranslationEntity;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * FAQ向量索引实体类
+ * 用于在Elasticsearch中存储FAQ的向量表示
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@Document(indexName = "bytedesk_faq_vector")
+public class FaqVector {
+    
+    @Id
+    private String uid;
+    
+    @Field(type = FieldType.Text)
+    private String question;
+    
+    @Field(type = FieldType.Text)
+    private String answer;
+    
+    @Field(type = FieldType.Text)
+    private List<String> similarQuestions;
+    
+    @Field(type = FieldType.Keyword)
+    private List<String> tagList;
+    
+    @Field(type = FieldType.Keyword)
+    private String orgUid;
+    
+    @Field(type = FieldType.Keyword)
+    private String kbUid;
+
+    @Field(type = FieldType.Keyword)
+    private String sourceUid;
+    
+    @Field(type = FieldType.Keyword)
+    private String categoryUid;
+    
+    @Field(type = FieldType.Boolean)
+    private Boolean enabled;
+
+    @Field(type = FieldType.Keyword)
+    private String language;
+
+    @Field(type = FieldType.Keyword)
+    private String sourceLanguage;
+
+    @Field(type = FieldType.Boolean)
+    private Boolean translated;
+
+    // 向量嵌入存储
+    @Field(type = FieldType.Dense_Vector, dims = 1536)
+    private float[] questionEmbedding;
+    
+    @Field(type = FieldType.Dense_Vector, dims = 1536)
+    private float[] answerEmbedding;
+    
+    // 文档ID列表（存储在向量库中的ID）
+    @Field(type = FieldType.Keyword)
+    private List<String> docIdList;
+    
+    // 有效日期范围
+    // @Field(type = FieldType.Date, format = DateFormat.date_hour_minute_second_millis)
+    // private ZonedDateTime startDate;
+
+    // @Field(type = FieldType.Date, format = DateFormat.date_hour_minute_second_millis)
+    // private ZonedDateTime endDate;
+    
+    // 统计数据
+    @Field(type = FieldType.Integer)
+    private Integer viewCount;
+    
+    @Field(type = FieldType.Integer)
+    private Integer clickCount;
+    
+    @Field(type = FieldType.Integer)
+    private Integer upCount;
+    
+    @Field(type = FieldType.Integer)
+    private Integer downCount;
+    
+    /**
+     * 从FaqEntity创建FaqVector实体的静态方法
+     * 注意：向量嵌入需要单独计算并设置
+     */
+    public static FaqVector fromFaqEntity(FaqEntity faq) {
+        String kbUid = (faq.getKbase() != null) ? faq.getKbase().getUid() : null;
+        if (!StringUtils.hasText(kbUid)) {
+            throw new IllegalArgumentException("kbUid is required for vectorizing faq uid=" + faq.getUid());
+        }
+        
+        return FaqVector.builder()
+            .uid(faq.getUid())
+            .question(faq.getQuestion())
+            .answer(faq.getAnswer())
+            .similarQuestions(faq.getSimilarQuestions())
+            .tagList(faq.getTagList())
+            .orgUid(faq.getOrgUid())
+            .kbUid(kbUid)
+            .sourceUid(faq.getUid())
+            .categoryUid(faq.getCategoryUid())
+            .enabled(faq.getEnabled())
+            .language(faq.getKbase() != null ? faq.getKbase().getSourceLanguage() : null)
+            .sourceLanguage(faq.getKbase() != null ? faq.getKbase().getSourceLanguage() : null)
+            .translated(false)
+            // .startDate(faq.getStartDate())
+            // .endDate(faq.getEndDate())
+            .viewCount(faq.getViewCount())
+            .clickCount(faq.getClickCount())
+            .upCount(faq.getUpCount())
+            .downCount(faq.getDownCount())
+            .docIdList(faq.getDocIdList())
+            .build();
+    }
+
+    public static FaqVector fromTranslation(FaqEntity faq, KbaseTranslationEntity translation) {
+        String kbUid = (faq.getKbase() != null) ? faq.getKbase().getUid() : null;
+        if (!StringUtils.hasText(kbUid)) {
+            throw new IllegalArgumentException("kbUid is required for vectorizing translated faq uid=" + faq.getUid());
+        }
+
+        String targetLanguage = StringUtils.hasText(translation.getTargetLanguage())
+                ? translation.getTargetLanguage().trim().toUpperCase()
+                : (faq.getKbase() != null ? faq.getKbase().getSourceLanguage() : null);
+
+        return FaqVector.builder()
+                .uid(translation.getUid())
+                .question(StringUtils.hasText(translation.getTitle()) ? translation.getTitle() : faq.getQuestion())
+                .answer(StringUtils.hasText(translation.getContent()) ? translation.getContent() : translation.getSummary())
+                .similarQuestions(new ArrayList<>())
+                .tagList(translation.getTagList() == null || translation.getTagList().isEmpty() ? faq.getTagList() : translation.getTagList())
+                .orgUid(faq.getOrgUid())
+                .kbUid(kbUid)
+                .sourceUid(faq.getUid())
+                .categoryUid(faq.getCategoryUid())
+                .enabled(Boolean.TRUE.equals(translation.getEnabled()) && Boolean.TRUE.equals(faq.getEnabled()))
+                .language(targetLanguage)
+                .sourceLanguage(faq.getKbase() != null ? faq.getKbase().getSourceLanguage() : null)
+                .translated(true)
+                .build();
+    }
+}

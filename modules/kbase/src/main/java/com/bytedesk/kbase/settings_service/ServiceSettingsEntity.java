@@ -1,0 +1,337 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-06-14 10:45:08
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-18 10:55:59
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.settings_service;
+
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+import org.modelmapper.ModelMapper;
+
+import com.bytedesk.core.base.BaseEntity;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.constant.TypeConsts;
+import com.bytedesk.core.enums.LanguageEnum;
+import com.bytedesk.kbase.llm_faq.FaqEntity;
+import com.bytedesk.kbase.quick_button.QuickButtonEntity;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.ManyToMany;
+import jakarta.persistence.Table;
+import jakarta.persistence.Index;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+@Entity
+@Table(
+    name = "bytedesk_kbase_service_settings",
+    indexes = {
+        @Index(name = "idx_service_settings_uid", columnList = "uuid")
+    }
+)
+@Builder
+@Accessors(chain = true)
+@AllArgsConstructor
+@NoArgsConstructor
+public class ServiceSettingsEntity extends BaseEntity {
+
+    private static final long serialVersionUID = 1L;
+
+    @NotBlank
+    @Builder.Default
+    private String language = LanguageEnum.ZH_CN.name();
+
+    @NotNull
+    @Builder.Default
+    private Boolean autoPopup = false;
+
+    // 顶部提示开关
+    @NotNull
+    @Builder.Default
+    private Boolean showTopTip = false;
+    
+    @NotBlank
+    @Builder.Default
+    private String topTip = I18Consts.I18N_TOP_TIP;
+
+    private ZonedDateTime topTipStart;
+
+    private ZonedDateTime topTipEnd;
+
+    // 满意度评价设置--------------------------------------------------
+    // 评价按钮显示控制已迁移至 ToolbarSettings.rate
+    // 关闭会话时自动发送满意度评价
+    @NotNull
+    @Builder.Default
+    private Boolean autoInviteRate = false;
+
+    // invite rate tip
+    @Builder.Default
+    private String inviteRateTip = I18Consts.I18N_INVITE_RATE_TIP;
+    
+    // 自定义评价最低消息数量，未达到最低对话消息数，禁止评价
+    @NotNull
+    @Builder.Default
+    private Integer rateMsgCount = 3;
+
+    //-----------------------------------------------------------------------------------
+
+    // 是否显示询前表单
+    @NotNull
+    @Builder.Default
+    private Boolean showPreForm = false;
+
+    // 是否强制填写
+    @NotNull
+    @Builder.Default
+    private Boolean preFormRequired = false;
+
+    @Builder.Default
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String preFormSchema = BytedeskConsts.EMPTY_JSON_STRING;
+
+    //-----------------------------------------------------------------------------------
+
+    // show history message or not
+    @NotNull
+    @Builder.Default
+    private Boolean showHistory = false;
+
+    /**
+     * Whether visitor can see message status (e.g. delivered/read) on visitor side.
+     * Default: true (keep existing UX unless explicitly disabled).
+     */
+    @NotNull
+    @Builder.Default
+    private Boolean showMessageStatus = true;
+
+    /**
+     * Whether visitor can recall messages on visitor side.
+     */
+    @NotNull
+    @Builder.Default
+    private Boolean allowVisitorRecall = true;
+
+    /**
+     * Recall time window in minutes for visitor side.
+     */
+    @NotNull
+    @Builder.Default
+    private Integer visitorRecallMinutes = 5;
+
+    /**
+     * 访客发起咨询是否需要登录（未登录则应先登录再创建会话）
+     */
+    @NotNull
+    @Builder.Default
+    @Column(name = "require_login")
+    private Boolean requireLogin = false;
+
+    // 防骚扰验证开关，自定义验证规则: 1. 访问频率 2. 发消息时间间隔
+    @NotNull
+    @Builder.Default
+    private Boolean showCaptcha = false;
+
+    @NotBlank
+    @Builder.Default
+    @Column(columnDefinition = TypeConsts.COLUMN_TYPE_TEXT)
+    private String welcomeTip = I18Consts.I18N_WELCOME_TIP;
+
+    // 换一换-Faq常见问题知识库
+    private String welcomeKbUid;
+
+    @Builder.Default
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+        name = "bytedesk_kbase_service_settings_welcome_faqs",
+        joinColumns = @JoinColumn(name = "service_settings_id"),
+        inverseJoinColumns = @JoinColumn(name = "welcome_faqs_id")
+    )
+    private List<FaqEntity> welcomeFaqs = new ArrayList<>();
+
+    //-----------------------------------------------------------------------------------
+
+    /** auto close time in minutes */
+    @NotNull
+    @Builder.Default
+    private Double autoCloseMin = Double.valueOf(25);
+
+    @Builder.Default
+    private String autoCloseTip = I18Consts.I18N_AUTO_CLOSE_TIP;
+
+    @Builder.Default
+    private String agentCloseTip = I18Consts.I18N_AGENT_CLOSE_TIP;
+
+    @Builder.Default
+    private String visitorCloseTip = I18Consts.I18N_VISITOR_CLOSE_TIP;
+
+    //-----------------------------------------------------------------------------------
+
+    // 桌面版聊天窗口右侧iframe
+    @Builder.Default
+    private Boolean showRightIframe = false;
+
+    // 桌面版聊天窗口右侧iframe地址
+    private String rightIframeUrl;
+
+    // 是否启用访客输入联想
+    @Builder.Default
+    private Boolean inputAssociationEnabled = false;
+
+    // 输入联想关联知识库
+    private String inputAssociationKbUid;
+
+    // 访客输入预览：访客输入内容预览发送给客服（MESSAGE_TYPE_PREVIEW）
+    @Builder.Default
+    private Boolean inputPreviewEnabled = false;
+
+    /**
+     * 输入预览是否一直显示（客服端预览框常驻，直到访客清空输入框或发送 clear 消息）
+     */
+    @Builder.Default
+    private Boolean inputPreviewAlwaysShow = false;
+
+    /**
+     * 输入预览显示时长（秒）。仅当 inputPreviewAlwaysShow=false 时生效。
+     */
+    @Builder.Default
+    private Integer inputPreviewShowSeconds = 5;
+    
+    // 右侧栏常见问题
+    @Builder.Default
+    private Boolean showFaqs = false;
+    @Builder.Default
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+        name = "bytedesk_kbase_service_settings_faqs",
+        joinColumns = @JoinColumn(name = "service_settings_id"),
+        inverseJoinColumns = @JoinColumn(name = "faqs_id")
+    )
+    private List<FaqEntity> faqs = new ArrayList<>();
+    // 常见问题知识库
+    private String faqKbUid;
+
+    // 快捷按钮
+    @Builder.Default
+    private Boolean showQuickButtons = false;
+    @Builder.Default
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+        name = "bytedesk_kbase_service_settings_quick_buttons",
+        joinColumns = @JoinColumn(name = "service_settings_id"),
+        inverseJoinColumns = @JoinColumn(name = "quick_button_id")
+    )
+    private List<QuickButtonEntity> quickButtons = new ArrayList<>();
+
+    @NotNull
+    @Builder.Default
+    private Boolean showLogo = true;
+
+    /**
+     * 访客端是否显示客服/机器人头像（左侧消息）
+     */
+    @NotNull
+    @Builder.Default
+    @Column(name = "show_agent_avatar")
+    private Boolean showAgentAvatar = true;
+
+    /**
+     * 访客端是否显示客服/机器人昵称（左侧消息）
+     */
+    @NotNull
+    @Builder.Default
+    @Column(name = "show_agent_nickname")
+    private Boolean showAgentNickname = true;
+
+    /**
+     * 访客端是否显示访客自己头像（右侧消息）
+     */
+    @NotNull
+    @Builder.Default
+    @Column(name = "show_visitor_avatar")
+    private Boolean showVisitorAvatar = true;
+
+    /**
+     * 访客端是否显示访客自己昵称（右侧消息）
+     */
+    @NotNull
+    @Builder.Default
+    @Column(name = "show_visitor_nickname")
+    private Boolean showVisitorNickname = true;
+
+    // validate until date, when expire the service will be disabled
+    private Date validateUntil;
+    
+    //-----------------------------------------------------------------------------------
+
+    // 工具栏显示控制(固定字段,未设置则默认为显示)
+    @Builder.Default
+    @Embedded
+    private ToolbarSettings toolbar = new ToolbarSettings();
+    
+    /**
+     * 从 ServiceSettingsRequest 创建 ServiceSettings 实体
+     * 如果 request 为 null，返回默认构建的实体
+     * 
+     * @param request ServiceSettingsRequest 对象，可以为 null
+     * @param modelMapper ModelMapper 实例用于字段映射
+     * @return ServiceSettings 实体，永远不为 null
+     */
+    public static ServiceSettingsEntity fromRequest(ServiceSettingsRequest request, ModelMapper modelMapper) {
+        // 如果 request 为 null，返回默认值
+        if (request == null || modelMapper == null) {
+            return ServiceSettingsEntity.builder().build();
+        }
+        
+        // 使用 ModelMapper 自动映射大部分字段
+        ServiceSettingsEntity settings = modelMapper.map(request, ServiceSettingsEntity.class);
+        
+        // 处理特殊字段: LanguageEnum 需要转换为 String
+        if (request.getLanguage() != null) {
+            settings.setLanguage(request.getLanguage().name());
+        }
+
+        applyRequestAliases(request, settings);
+        
+        return settings;
+    }
+
+    public static void applyRequestAliases(ServiceSettingsRequest request, ServiceSettingsEntity settings) {
+        if (request == null || settings == null) {
+            return;
+        }
+
+        if (request.getPreForm() != null) {
+            settings.setPreFormSchema(request.getPreForm());
+        }
+    }
+    
+}

@@ -1,0 +1,73 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-05-11 18:25:55
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-06-03 15:46:22
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.llm_text;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.time.ZonedDateTime;
+
+public interface TextRepository extends JpaRepository<TextEntity, Long>, JpaSpecificationExecutor<TextEntity> {
+
+    Optional<TextEntity> findByUid(String uid);
+
+    @Query("select t from TextEntity t left join fetch t.kbase where t.uid = :uid")
+    Optional<TextEntity> findByUidWithKbase(@Param("uid") String uid);
+
+    // Boolean existsByPlatform(String platform);
+
+    List<TextEntity> findByKbase_UidAndDeletedFalse(String kbUid);
+
+    List<TextEntity> findByDeletedFalse();
+
+    Boolean existsByTitleAndKbase_UidAndDeletedFalse(String title, String kbUid);
+    
+    /**
+     * 查找状态为指定值但向量状态不是指定值的Text实体
+     * @param elasticStatus 状态值
+     * @param vectorStatus 向量状态值 
+     * @return Text实体列表
+     */
+    List<TextEntity> findByElasticStatusAndVectorStatusNot(String elasticStatus, String vectorStatus);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update TextEntity t set t.elasticStatus = :status where t.uid = :uid")
+    int updateElasticStatusByUid(@Param("uid") String uid, @Param("status") String status);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update TextEntity t set t.vectorStatus = :status where t.uid = :uid")
+    int updateVectorStatusByUid(@Param("uid") String uid, @Param("status") String status);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update TextEntity t set t.docIdList = :docIdList where t.uid = :uid")
+    int updateDocIdListByUid(@Param("uid") String uid, @Param("docIdList") List<String> docIdList);
+
+    /**
+     * 查询已过期但仍残留在索引中的 Text（endDate < now 且 elastic/vector 状态为 SUCCESS）
+     * 供过期清理定时任务分页使用
+     */
+    @Query(value = "select t from TextEntity t where t.deleted = false and t.endDate < :now "
+            + "and (t.elasticStatus = 'SUCCESS' or t.vectorStatus = 'SUCCESS')",
+           countQuery = "select count(t) from TextEntity t where t.deleted = false and t.endDate < :now "
+            + "and (t.elasticStatus = 'SUCCESS' or t.vectorStatus = 'SUCCESS')")
+    Page<TextEntity> findExpiredIndexed(@Param("now") ZonedDateTime now, Pageable pageable);
+}

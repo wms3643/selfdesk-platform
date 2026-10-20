@@ -1,0 +1,611 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.bytedesk</groupId>
+        <artifactId>im</artifactId>
+        <version>${revision}</version>
+    </parent>
+
+    <artifactId>modules</artifactId>
+    <packaging>pom</packaging>
+    <version>${revision}</version>
+
+    <modules>
+        <module>ai</module>
+        <module>bi</module>
+        <module>call</module>
+        <module>cli</module>
+        <module>core</module>
+        <module>crm</module>
+        <module>disk</module>
+        <module>erp</module>
+        <module>forum</module>
+        <module>kanban</module>
+        <module>kbase</module>
+        <module>mall</module>
+        <module>marketing</module>
+        <module>meet</module>
+        <module>office</module>
+        <module>opinion</module>
+        <module>service</module>
+        <module>remote</module>
+        <module>social</module>
+        <module>team</module>
+        <module>ticket</module>
+        <module>training</module>
+        <module>voc</module>
+        <module>webrtc</module>
+    </modules>
+
+    <properties>
+    </properties>
+
+    <dependencies>
+    
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-tomcat</artifactId>
+                </exclusion>
+            </exclusions>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jetty</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-freemarker</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-artemis</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+        <!-- RabbitMQ -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+			<groupId>org.springframework.amqp</groupId>
+			<artifactId>spring-rabbit</artifactId>
+            <scope>provided</scope>
+		</dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- https://redisson.pro/docs/integration-with-spring/ -->
+        <!-- https://mvnrepository.com/artifact/org.redisson/redisson-spring-boot-starter -->
+		<!-- <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-boot-starter</artifactId>
+			<version>4.1.0</version>
+            <scope>provided</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.redisson</groupId>
+                    <artifactId>redisson-spring-data-40</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency> -->
+        <!-- Source: https://mvnrepository.com/artifact/org.redisson/redisson-spring-data-35 -->
+        <!-- <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-data-35</artifactId>
+            <version>4.1.0</version>
+            <scope>provided</scope>
+        </dependency> -->
+
+        <!-- 全文检索 -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+            <scope>provided</scope>
+		</dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+            <version>${spring-retry.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aspectj</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-quartz</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-batch</artifactId>
+            <scope>provided</scope>
+		</dependency>
+
+        <!-- Spring Boot Mail Starter -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- Spring Integration Mail (用于轮询邮箱) -->
+        <!-- 主要用于构建邮件接收系统和邮件工作流 -->
+        <!-- https://docs.spring.io/spring-integration/reference/mail.html -->
+		<dependency>
+			<groupId>org.springframework.integration</groupId>
+			<artifactId>spring-integration-mail</artifactId>
+            <scope>provided</scope>
+		</dependency>
+
+		<!-- Jakarta Mail API -->
+        <!-- 提供了发送和接收邮件的标准 Java API，只包含接口定义，不包含实现 -->
+		<!-- <dependency>
+			<groupId>jakarta.mail</groupId>
+			<artifactId>jakarta.mail-api</artifactId>
+		</dependency> -->
+
+		<!-- Jakarta Mail 实现 -->
+        <!-- Eclipse Angus 是 Jakarta Mail 的参考实现，提供了实际的邮件操作功能实现 -->
+		<!-- <dependency>
+			<groupId>org.eclipse.angus</groupId>
+			<artifactId>angus-mail</artifactId>
+		</dependency> -->
+
+        <!--
+        https://mvnrepository.com/artifact/org.springframework.boot/spring-boot-configuration-processor -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-client-chat</artifactId>
+			<version>${spring-ai.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
+        <!-- querydsl crud增强-->
+        <!-- http://querydsl.com/ -->
+        <!-- https://github.com/querydsl/querydsl/tree/master/querydsl-jpa -->
+        <!-- https://mvnrepository.com/artifact/com.querydsl/querydsl-jpa -->
+        <!-- <dependency>
+            <groupId>com.querydsl</groupId>
+            <artifactId>querydsl-jpa</artifactId>
+            <classifier>jakarta</classifier>
+            <version>${querydsl.version}</version>
+        </dependency> -->
+
+        <!--  -->
+        <!-- https://mvnrepository.com/artifact/com.alibaba.fastjson2/fastjson2 -->
+        <!-- https://alibaba.github.io/fastjson2/ -->
+        <!-- https://github.com/alibaba/fastjson2/blob/main/docs/spring_support_cn.md -->
+        <dependency>
+            <groupId>com.alibaba.fastjson2</groupId>
+            <artifactId>fastjson2</artifactId>
+            <version>${fastjson2.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- for transforming ZonedDateTime -->
+        <!--
+        https://mvnrepository.com/artifact/com.fasterxml.jackson.datatype/jackson-datatype-jsr310 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-core -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-core</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-databind -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-annotations -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>${jackson.annotation.version}</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.datatype/jackson-datatype-hibernate7 -->
+        <!-- 用于处理Hibernate懒加载代理对象的序列化 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-hibernate7</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <!--  xml 格式处理 -->
+        <!-- https://mvnrepository.com/artifact/com.fasterxml.jackson.dataformat/jackson-dataformat-xml -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-xml</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- 跟Spring ai中swagger集成冲突，去掉 -->
+        <!-- http://127.0.0.1:9003/swagger-ui/index.html -->
+        <!-- https://mvnrepository.com/artifact/org.springdoc/springdoc-openapi-starter-webmvc-ui -->
+        <!-- 添加provided会报错 -->
+        <!-- <scope>provided</scope> -->
+        <dependency>
+             <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.springdoc/springdoc-openapi-starter-webflux-ui -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+			<version>${springdoc.version}</version>
+		</dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.modelmapper/modelmapper -->
+        <dependency>
+            <groupId>org.modelmapper</groupId>
+            <artifactId>modelmapper</artifactId>
+            <version>${modelmapper.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 一级缓存 -->
+        <!-- https://mvnrepository.com/artifact/com.github.ben-manes.caffeine/caffeine -->
+        <!-- <version>3.1.8</version> -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/com.google.guava/guava -->
+        <!-- https://wizardforcel.gitbooks.io/guava-tutorial/content/1.html -->
+        <!-- https://github.com/google/guava/wiki -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>33.3.1-jre</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!--aliyun sms-->
+        <!-- https://mvnrepository.com/artifact/com.aliyun/aliyun-java-sdk-core -->
+        <dependency>
+            <groupId>com.aliyun</groupId>
+            <artifactId>aliyun-java-sdk-core</artifactId>
+            <!-- <version>4.6.4</version> -->
+            <version>4.5.13</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- aliyun ecs send email -->
+        <!-- https://mvnrepository.com/artifact/com.aliyun/aliyun-java-sdk-dm -->
+        <dependency>
+            <groupId>com.aliyun</groupId>
+            <artifactId>aliyun-java-sdk-dm</artifactId>
+            <!-- <version>3.3.2</version> -->
+            <version>3.3.1</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- export excel -->
+        <!-- https://mvnrepository.com/artifact/com.alibaba/easyexcel -->
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>easyexcel</artifactId>
+            <version>${easyexcel.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- ///////////////////////////////////////////////////////////////////////////// -->
+
+		<!-- https://mvnrepository.com/artifact/org.drools/drools-core -->
+		<!-- <dependency>
+			<groupId>org.drools</groupId>
+			<artifactId>drools-core</artifactId>
+			<version>${drools.version}</version>
+		</dependency> -->
+        <!-- https://mvnrepository.com/artifact/org.drools/drools-rules-spring-boot-starter -->
+        <!-- <dependency>
+            <groupId>org.drools</groupId>
+            <artifactId>drools-rules-spring-boot-starter</artifactId>
+            <version>${drools.version}</version>
+        </dependency> -->
+        <!-- https://mvnrepository.com/artifact/org.drools/drools-decisions-spring-boot-starter -->
+        <!-- <dependency>
+            <groupId>org.drools</groupId>
+            <artifactId>drools-decisions-spring-boot-starter</artifactId>
+            <version>${drools.version}</version>
+        </dependency> -->
+        <!-- https://mvnrepository.com/artifact/org.drools/drools-addons-springboot-events-rules -->
+        <!-- <dependency>
+            <groupId>org.drools</groupId>
+            <artifactId>drools-addons-springboot-events-rules</artifactId>
+            <version>${drools.version}</version>
+        </dependency> -->
+
+        <!-- https://mvnrepository.com/artifact/org.apache.commons/commons-lang3 -->
+        <!-- <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.14.0</version>
+            <scope>provided</scope>
+        </dependency> -->
+
+        <!-- 生成随机用户：用户名、邮箱、地址等，方便测试 https://github.com/DiUS/java-faker?tab=readme-ov-file -->
+        <!-- https://mvnrepository.com/artifact/com.github.javafaker/javafaker -->
+        <!-- <dependency>
+            <groupId>com.github.javafaker</groupId>
+            <artifactId>javafaker</artifactId>
+            <version>1.0.2</version>
+        </dependency> -->
+
+        <!-- 定时任务 -->
+        <!-- https://mvnrepository.com/artifact/com.xuxueli/xxl-job-core -->
+        <!-- <dependency>
+            <groupId>com.xuxueli</groupId>
+            <artifactId>xxl-job-core</artifactId>
+            <version>2.4.1</version>
+            <scope>provided</scope>
+        </dependency> -->
+
+        <!-- 验证码 -->
+        <!-- https://mvnrepository.com/artifact/pro.fessional/kaptcha -->
+        <dependency>
+            <groupId>pro.fessional</groupId>
+            <artifactId>kaptcha</artifactId>
+            <version>2.3.3</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- https://www.cnblogs.com/cao-lei/p/17099729.html -->
+        <!-- https://mvnrepository.com/artifact/com.lmax/disruptor -->
+        <!-- <dependency>
+            <groupId>com.lmax</groupId>
+            <artifactId>disruptor</artifactId>
+            <version>4.0.0</version>
+            <scope>provided</scope>
+        </dependency> -->
+
+        <!-- https://github.com/redis/jedis?tab=readme-ov-file -->
+        <!-- https://mvnrepository.com/artifact/redis.clients/jedis -->
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>${jedis.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/commons-io/commons-io -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.20.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- jedis pool config -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- validate mobile phone number format -->
+        <!-- https://github.com/google/libphonenumber/ -->
+        <!-- https://www.baeldung.com/java-libphonenumber -->
+        <!-- https://mvnrepository.com/artifact/com.googlecode.libphonenumber -->
+        <!-- libphonenumber：用于校验手机号的正确性，提供了：getNumberType，isNumberMatch ，getExampleNumber 等方法。 -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>8.13.51</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- carrier：用于获取手机号的供应商。通过初始化PhoneNumberToCarrierMapper ，调用getNameForNumber可获取运营商信息。 -->
+        <!-- https://mvnrepository.com/artifact/com.googlecode.libphonenumber/carrier -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>carrier</artifactId>
+            <version>1.235</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- geocoder：用于获取手机号的归属地。通过初始化PhoneNumberOfflineGeocoder
+        ，调用getDescriptionForNumber方法可获取手机归属地 -->
+        <!-- https://mvnrepository.com/artifact/com.googlecode.libphonenumber/geocoder -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>geocoder</artifactId>
+            <version>2.245</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- TODO: Rate Limiter -->
+		<!-- https://bucket4j.com/8.14.0/toc.html -->
+		<!-- https://github.com/bucket4j/bucket4j -->
+		<!-- https://mvnrepository.com/artifact/com.bucket4j/bucket4j_jdk17-core -->
+		<!-- <dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j_jdk17-core</artifactId>
+			<version>8.14.0</version>
+		</dependency> -->
+
+		<!-- TODO: DDos Protection -->
+		<!-- https://mvnrepository.com/artifact/org.apache.commons/commons-collections4 -->
+		<!-- <dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-collections4</artifactId>
+			<version>4.5.0-M3</version>
+		</dependency> -->
+
+        <!--  -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.springframework.security/spring-security-test -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- https://mvnrepository.com/artifact/com.querydsl/querydsl-apt -->
+            <!-- <plugin>
+                <groupId>com.mysema.maven</groupId>
+                <artifactId>apt-maven-plugin</artifactId>
+                <version>${apt.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.querydsl</groupId>
+                        <artifactId>querydsl-apt</artifactId>
+                        <classifier>jakarta</classifier>
+                        <version>${querydsl.version}</version>
+                    </dependency>
+                </dependencies>
+                <executions>
+                    <execution>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>process</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>target/generated-sources/queries</outputDirectory>
+                            <processor>com.querydsl.apt.jpa.JPAAnnotationProcessor</processor>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin> -->
+        </plugins>
+    </build>
+
+    <!-- APIJSON 必须用到的托管平台 -->
+    <!-- <repositories>
+        <repository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </repository>
+    </repositories> -->
+
+    <repositories>
+		<!-- https://java2ai.com/docs/dev/get-started/ -->
+		<repository>
+			<id>spring-milestones</id>
+			<name>Spring Milestones</name>
+			<url>https://repo.spring.io/milestone</url>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+		</repository>
+		<!-- https://docs.spring.io/spring-ai/reference/getting-started.html -->
+		<!-- https://repo.spring.io/ui/native/snapshot/org/springframework/ai/ -->
+		<repository>
+			<id>spring-snapshots</id>
+			<name>Spring Snapshots</name>
+			<url>https://repo.spring.io/snapshot</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+		<!-- https://oss.sonatype.org/content/repositories/snapshots/com/alibaba/cloud/ai/spring-ai-alibaba-bom/1.0.0.3-SNAPSHOT/maven-metadata.xml -->
+		<repository>
+			<name>Central Portal Snapshots</name>
+			<id>central-portal-snapshots</id>
+			<url>https://oss.sonatype.org/content/repositories/snapshots/</url>
+			<releases>
+				<enabled>false</enabled>
+			</releases>
+			<snapshots>
+				<enabled>true</enabled>
+			</snapshots>
+		</repository>
+	</repositories>
+
+</project>

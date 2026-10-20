@@ -1,0 +1,134 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-05-22 15:42:50
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-22 07:20:32
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.token;
+
+import org.springframework.data.domain.Page;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.bytedesk.core.annotation.ActionAnnotation;
+import com.bytedesk.core.base.BaseRestController;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.utils.JsonResult;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v1/token")
+@AllArgsConstructor
+@Tag(name = "Token Management", description = "Token management APIs")
+public class TokenRestController extends BaseRestController<TokenRequest, TokenRestService> {
+
+    private final TokenRestService tokenRestService;
+
+    @Override
+    @GetMapping("/query/org")
+    public ResponseEntity<?> queryByOrg(TokenRequest request) {
+        
+        Page<TokenResponse> page = tokenRestService.queryByOrg(request);
+
+        return ResponseEntity.ok(JsonResult.success(page));
+    }
+
+    @Override
+    @GetMapping({"/query", "/query/user"})
+    public ResponseEntity<?> queryByUser(TokenRequest request) {
+        
+        Page<TokenResponse> page = tokenRestService.queryByUser(request);
+
+        return ResponseEntity.ok(JsonResult.success(page));
+    }
+
+    @Override
+    @GetMapping("/query/uid")
+    public ResponseEntity<?> queryByUid(TokenRequest request) {
+
+        TokenResponse response = tokenRestService.queryByUid(request);
+        // 
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    @Override
+    @PostMapping("/create")
+    public ResponseEntity<?> create(@RequestBody TokenRequest request) {
+        
+        TokenResponse response = tokenRestService.create(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    @Override
+    @PostMapping("/update")
+    public ResponseEntity<?> update(@RequestBody TokenRequest request) {
+        
+        TokenResponse response = tokenRestService.update(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    @Override
+    @PostMapping("/delete")
+    public ResponseEntity<?> delete(@RequestBody TokenRequest request) {
+        
+        tokenRestService.delete(request);
+
+        return ResponseEntity.ok(JsonResult.success());
+    }
+
+    @PostMapping("/generate")
+    @ActionAnnotation(title = I18Consts.I18N_TOKEN, action = I18Consts.I18N_ACTION_GENERATE_TOKEN, description = "Generate Access Token")
+    public ResponseEntity<?> generateAccessToken(@RequestBody TokenRequest request) {
+
+        String accessToken = tokenRestService.generateAccessToken(request);
+
+        return ResponseEntity.ok(JsonResult.success("success", accessToken));
+    }
+
+    @PostMapping("/revoke")
+    @ActionAnnotation(title = I18Consts.I18N_TOKEN, action = I18Consts.I18N_ACTION_REVOKE_TOKEN, description = "Revoke Access Token")
+    public ResponseEntity<?> revoke(@RequestBody TokenRequest request) {
+
+        String reason = request.getRevokeReason();
+        if (StringUtils.hasText(request.getUid())) {
+            tokenRestService.revokeByUid(request.getUid(), reason);
+            return ResponseEntity.ok(JsonResult.success());
+        }
+        if (StringUtils.hasText(request.getAccessToken())) {
+            tokenRestService.revokeAccessToken(request.getAccessToken(), reason);
+            return ResponseEntity.ok(JsonResult.success());
+        }
+
+        return ResponseEntity.badRequest().body(JsonResult.error("uid or accessToken is required", 400));
+    }
+
+    @PostMapping("/refresh")
+    @ActionAnnotation(title = I18Consts.I18N_TOKEN, action = I18Consts.I18N_ACTION_GENERATE_TOKEN, description = "Refresh Access Token")
+    public ResponseEntity<?> refresh(@RequestBody TokenRequest request) {
+
+        TokenResponse response = tokenRestService.refreshAccessToken(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    
+    
+}

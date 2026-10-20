@@ -1,0 +1,108 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-02-22 16:16:42
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-06-03 16:58:05
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.article;
+
+import java.util.HashSet;
+import java.util.Set;
+
+import com.bytedesk.core.message.enums.MessageTypeEnum;
+import com.bytedesk.kbase.article_attachment.ArticleAttachmentEntity;
+
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+import lombok.experimental.SuperBuilder;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PrePersist;
+
+/**
+ * 帮助文档
+ */
+@Entity
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = true, exclude = { "attachments" })
+@NoArgsConstructor
+@EntityListeners({ ArticleEntityListener.class })
+@Table(name = "bytedesk_kbase_article")
+public class ArticleEntity extends AbstractArticleEntity {
+
+    private static final long serialVersionUID = 1L;
+
+    /**
+     * 附件列表：正文之外的独立附件（如截图、文件）
+     */
+    @Builder.Default
+    @OneToMany(mappedBy = "article", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private Set<ArticleAttachmentEntity> attachments = new HashSet<>();
+
+    @PrePersist
+    public void prePersist() {
+        if (getType() == null) {
+            setType(MessageTypeEnum.TEXT.name());
+        }
+        if (getAuditStatus() == null) {
+            setAuditStatus(ArticleAuditStatusEnum.PENDING.name());
+        }
+    }
+    
+    @PostLoad
+    public void postLoad() {
+        if (getType() == null) {
+            setType(MessageTypeEnum.TEXT.name());
+        }
+    }
+
+    public ArticleEntity setElasticSuccess() {
+        this.setElasticStatus(ArticleStatusEnum.SUCCESS.name());
+        return this;
+    }
+
+    public ArticleEntity setElasticError() {
+        this.setElasticStatus(ArticleStatusEnum.ERROR.name());
+        return this;
+    }
+
+    public ArticleEntity setVectorSuccess() {
+        this.setVectorStatus(ArticleStatusEnum.SUCCESS.name());
+        return this;
+    }
+    
+    public ArticleEntity setVectorError() {
+        this.setVectorStatus(ArticleStatusEnum.ERROR.name());
+        return this;
+    }
+
+    // elastic 索引状态
+    public boolean isElasticStatusSuccess() {
+        return ArticleStatusEnum.SUCCESS.name().equals(getElasticStatus());
+    }
+
+    /**
+     * 检查文章是否已经完成向量索引
+     * @return true if vectorStatus is SUCCESS
+     */
+    public boolean isVectorIndexed() {
+        return ArticleStatusEnum.SUCCESS.name().equals(getVectorStatus());
+    }
+}

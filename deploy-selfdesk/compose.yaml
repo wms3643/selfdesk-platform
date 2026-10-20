@@ -1,0 +1,47 @@
+# 本地基础设施：Elasticsearch（检索 + 向量库）与可选的 Redis
+#
+# 用法：
+#   docker compose up -d
+#   docker compose logs -f elasticsearch
+#
+# 说明：
+# - 应用默认用 H2，不需要额外的数据库容器
+# - Elasticsearch 映射到 19200，与 scripts/selfdesk.ps1 的默认端口一致
+# - Redis 默认不启用（bytedesk.cache.level=0 时不需要），需要时取消注释
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: selfdesk-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "19200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: selfdesk-redis
+  #   command: ["redis-server", "--requirepass", "change-me"]
+  #   ports:
+  #     - "16379:6379"
+  #   volumes:
+  #     - redisdata:/data
+
+volumes:
+  esdata:
+  # redisdata:

@@ -1,0 +1,1008 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-03-15 11:35:53
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-05 10:48:03
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.upload;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.MalformedURLException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+// import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.util.Optional;
+import java.util.stream.Stream;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import javax.imageio.ImageIO;
+import jakarta.servlet.http.HttpServletRequest;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+
+import com.bytedesk.core.constant.I18Consts;
+import org.springframework.util.FileSystemUtils;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.bytedesk.core.base.BaseRestService;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.user.UserConvertUtils;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.upload.minio.UploadMinioService;
+import com.bytedesk.core.upload.storage.UploadStorageException;
+import com.bytedesk.core.upload.storage.UploadStorageFileNotFoundException;
+import com.bytedesk.core.utils.BdDateUtils;
+import com.bytedesk.core.utils.BdUploadUtils;
+import com.bytedesk.core.utils.ConvertUtils;
+
+import lombok.extern.slf4j.Slf4j;
+
+// https://spring.io/guides/gs/uploading-files
+@Slf4j
+@Service
+public class UploadRestService extends BaseRestService<UploadEntity, UploadRequest, UploadResponse> {
+
+	private final Path uploadDir;
+
+	private final UidUtils uidUtils;
+
+	private final ModelMapper modelMapper;
+
+	private final UploadRepository uploadRepository;
+
+	private final BytedeskProperties bytedeskProperties;
+
+	private final AuthService authService;
+
+	private final UploadSecurityConfig uploadSecurityConfig;
+
+	private final UploadSecurityLogger uploadSecurityLogger;
+
+	// 可选依赖：水印服务（当 bytedesk.watermark.enabled=false 时不加载）
+	private final UploadWatermarkService uploadWatermarkService;
+
+	private final UploadMinioService uploadMinioService;
+
+	public UploadRestService(Path uploadDir,
+			UidUtils uidUtils,
+			ModelMapper modelMapper,
+			UploadRepository uploadRepository,
+			BytedeskProperties bytedeskProperties,
+			AuthService authService,
+			UploadSecurityConfig uploadSecurityConfig,
+			UploadSecurityLogger uploadSecurityLogger,
+			ObjectProvider<UploadWatermarkService> uploadWatermarkServiceProvider,
+			ObjectProvider<UploadMinioService> uploadMinioServiceProvider) {
+		this.uploadDir = uploadDir;
+		this.uidUtils = uidUtils;
+		this.modelMapper = modelMapper;
+		this.uploadRepository = uploadRepository;
+		this.bytedeskProperties = bytedeskProperties;
+		this.authService = authService;
+		this.uploadSecurityConfig = uploadSecurityConfig;
+		this.uploadSecurityLogger = uploadSecurityLogger;
+		this.uploadWatermarkService = uploadWatermarkServiceProvider.getIfAvailable();
+		this.uploadMinioService = uploadMinioServiceProvider.getIfAvailable();
+	}
+
+	@Override
+	protected Specification<UploadEntity> createSpecification(UploadRequest request) {
+		return UploadSpecification.search(request, authService);
+	}
+
+	@Override
+	protected Page<UploadEntity> executePageQuery(Specification<UploadEntity> spec, Pageable pageable) {
+		return uploadRepository.findAll(spec, pageable);
+	}
+
+	@Override
+	public Optional<UploadEntity> findByUid(String uid) {
+		return uploadRepository.findByUid(uid);
+	}
+
+	@Override
+	public UploadResponse create(UploadRequest request) {
+		UploadEntity upload = modelMapper.map(request, UploadEntity.class);
+		upload.setUid(uidUtils.getUid());
+		//
+		UploadEntity savedUpload = save(upload);
+		if (savedUpload == null) {
+			throw new UploadStorageException("保存上传记录失败: " + upload.getFileName(), 500);
+		}
+
+		return convertToResponse(savedUpload);
+	}
+
+	@Override
+	public UploadResponse update(UploadRequest request) {
+		Optional<UploadEntity> uploadOptional = findByUid(request.getUid());
+		if (uploadOptional.isPresent()) {
+			UploadEntity upload = uploadOptional.get();
+			modelMapper.map(request, upload);
+			// 保存
+			UploadEntity updatedUpload = save(upload);
+			return convertToResponse(updatedUpload);
+		} else {
+			throw new RuntimeException("Upload with uid '" + request.getUid() + "' not found");
+		}
+	}
+
+	@Override
+	protected UploadEntity doSave(UploadEntity entity) {
+		return uploadRepository.save(entity);
+	}
+
+	@Override
+	public UploadEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e, UploadEntity entity) {
+		try {
+			Optional<UploadEntity> latest = uploadRepository.findByUid(entity.getUid());
+			if (latest.isPresent()) {
+				UploadEntity latestEntity = latest.get();
+				// 合并需要保留的数据
+				latestEntity.setStatus(entity.getStatus());
+				latestEntity.setFileName(entity.getFileName());
+				latestEntity.setFileUrl(entity.getFileUrl());
+				// 
+				return uploadRepository.save(latestEntity);
+			}
+		} catch (Exception ex) {
+			log.error("无法处理乐观锁冲突: {}", ex.getMessage(), ex);
+			throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+		}
+		return null;
+	}
+
+	// 给出图片URL地址，将其保存到本地
+    public String storeFromUrl(String url, String fileName) {
+		// fileName添加前缀: 20240916144702_, // 例如：20240916144702_身份证-背面.jpg
+		fileName = BdDateUtils.formatDatetimeUid() + "_" + fileName;
+		// storeFromUrl url: https://api.telegram.org/file/bot7968513107:AAHuHmMSQM_4CeO46bAr0FmLH5ryvzzJ2dQ/photos/file_2.jpg, fileName: 20250617172223_file_2.jpg
+		log.info("storeFromUrl url: {}, fileName: {}", url, fileName);
+        // 根据当前日期创建文件夹，格式如：2021/03/15
+        String currentDateFolder = BdDateUtils.formatDateSlashNow();
+
+        try {
+            // 构建包含日期文件夹的文件路径
+            Path dateFolderPath = this.uploadDir.resolve(currentDateFolder);
+            Files.createDirectories(dateFolderPath); // 创建日期文件夹（如果不存在）
+
+            Path destinationFile = dateFolderPath.resolve(fileName).normalize().toAbsolutePath();
+
+            if (!destinationFile.getParent().equals(dateFolderPath.toAbsolutePath())) {
+                // 这是一个安全检查
+				throw new UploadStorageException("非法文件路径（疑似路径穿越攻击）", 400);
+            }
+
+            // 下载并保存图片
+			try (InputStream inputStream = URI.create(url).toURL().openStream()) {
+                Files.copy(inputStream, destinationFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            // return destinationFile.toString();
+			String uploadPath = currentDateFolder + "/" + fileName;
+			String fileUrl = String.format("%s/file/%s", bytedeskProperties.getUploadUrl(), uploadPath);
+			return fileUrl;
+        } catch (IOException e) {
+			throw new UploadStorageException(
+				"从URL下载并保存文件失败: " + (e.getMessage() == null ? "未知错误" : e.getMessage()),
+				400,
+				e
+			);
+        }
+    }
+
+	public String store(MultipartFile file, String fileName) {
+		return store(file, fileName, null);
+	}
+
+	public String store(MultipartFile file, String fileName, UploadRequest request) {
+		// 文件名再次过滤，防止绕过
+		fileName = filterAndRenameFileName(fileName);
+		// 根据当前日期创建文件夹，格式如：2021/03/15
+		DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy/MM/dd");
+		String currentDateFolder = LocalDate.now().format(formatter);
+
+		try {
+			if (file == null || file.isEmpty()) {
+				throw new UploadStorageException("空文件，无法上传", 400);
+			}
+
+			// 文件类型白名单校验
+			String contentType = file.getContentType();
+			if (!isAllowedFileType(fileName, contentType)) {
+				String ext = getFileExt(fileName);
+				String reason = (ext == null || ext.isEmpty()) ? "不支持的文件类型" : ("不支持的文件类型: ." + ext);
+				throw new UploadStorageException(reason, 415);
+			}
+			// 文件大小限制
+			if (!isFileSizeValid(file.getSize())) {
+				throw new UploadStorageException("文件过大，最大支持" + getFileSizeDescription(), 413);
+			}
+			// 图片内容校验
+			if (uploadSecurityConfig.isEnableImageValidation() && isImageFile(fileName, contentType)) {
+				try {
+					ImageIO.read(file.getInputStream());
+				} catch (Exception e) {
+					throw new UploadStorageException("图片内容校验失败（文件可能已损坏或伪造扩展名）", 422);
+				}
+			}
+			// 构建包含日期文件夹的文件路径
+			Path dateFolderPath = this.uploadDir.resolve(currentDateFolder);
+			Files.createDirectories(dateFolderPath); // 创建日期文件夹（如果不存在）
+
+			Path destinationFile = dateFolderPath.resolve(fileName).normalize().toAbsolutePath();
+
+			if (!destinationFile.getParent().equals(dateFolderPath.toAbsolutePath())) {
+				// 这是一个安全检查
+				throw new UploadStorageException("非法文件路径（疑似路径穿越攻击）", 400);
+			}
+
+			// 检查是否需要添加水印（水印服务可能未启用）
+			if (uploadWatermarkService != null && uploadWatermarkService.shouldAddWatermark(file, request)) {
+				log.info("为图片添加水印: {}", fileName);
+				uploadWatermarkService.addWatermarkToFile(file, destinationFile, request);
+			} else {
+				// 直接保存原文件
+				try (InputStream inputStream = file.getInputStream()) {
+					Files.copy(inputStream, destinationFile, StandardCopyOption.REPLACE_EXISTING);
+				}
+			}
+
+			// 返回包含日期文件夹的文件名路径
+			String uploadPath = currentDateFolder + "/" + fileName;
+			String fileUrl = String.format("%s/file/%s", bytedeskProperties.getUploadUrl(), uploadPath);
+			return fileUrl;
+
+		} catch (IOException e) {
+			throw new UploadStorageException(
+				"保存文件失败: " + (e.getMessage() == null ? "未知错误" : e.getMessage()),
+				503,
+				e
+			);
+		}
+	}
+
+    // ========== 安全辅助方法 ========== 
+    // 文件类型白名单校验 - 使用配置化的安全策略
+    private boolean isAllowedFileType(String fileName, String contentType) {
+        String ext = getFileExt(fileName);
+
+		// 主动内容文件（尤其是 SVG）存在脚本执行风险，禁止通过上传链路直接落盘
+		if ("svg".equalsIgnoreCase(ext) || "svgz".equalsIgnoreCase(ext)) {
+			return false;
+		}
+		if (contentType != null && contentType.toLowerCase().contains("image/svg")) {
+			return false;
+		}
+        
+        // 检查扩展名
+        if (!uploadSecurityConfig.isExtensionAllowed(ext)) {
+            return false;
+        }
+        
+        // 检查MIME类型
+        if (contentType != null && !uploadSecurityConfig.isMimeTypeAllowed(contentType)) {
+            return false;
+        }
+        
+        return true;
+    }
+
+    private boolean isImageFile(String fileName, String contentType) {
+        return BdUploadUtils.isImageFile(fileName, contentType);
+    }
+
+    private String getFileExt(String fileName) {
+        return BdUploadUtils.getFileExtension(fileName);
+    }
+
+    // 文件名过滤与重命名 - 使用配置化的安全策略
+    private String filterAndRenameFileName(String fileName) {
+        if (fileName == null) fileName = "file";
+        
+        // 检查文件名长度
+        if (fileName.length() > uploadSecurityConfig.getMaxFileNameLength()) {
+            fileName = BdUploadUtils.truncateFileName(fileName, uploadSecurityConfig.getMaxFileNameLength());
+        }
+        
+        if (uploadSecurityConfig.isEnableFileNameFilter()) {
+            fileName = BdUploadUtils.sanitizeFileName(fileName);
+        }
+        
+        if (uploadSecurityConfig.isForceRename()) {
+            fileName = BdUploadUtils.generateSafeFileName(fileName);
+        }
+        
+        return fileName;
+    }
+
+    // 文件大小校验
+    private boolean isFileSizeValid(long fileSize) {
+        return uploadSecurityConfig.isFileSizeValid(fileSize);
+    }
+
+    // 获取文件大小限制描述
+    private String getFileSizeDescription() {
+        return uploadSecurityConfig.getMaxFileSizeDescription();
+    }	public Stream<Path> loadAll() {
+		try {
+			return Files.walk(this.uploadDir, 1)
+					.filter(path -> !path.equals(this.uploadDir))
+					.map(this.uploadDir::relativize);
+		} catch (IOException e) {
+			throw new UploadStorageException("Failed to read stored files", e);
+		}
+	}
+
+	/**
+	 * 从 UploadEntity 加载文件资源
+	 * 优先使用 fileUrl，如果 fileUrl 为空则使用 fileName
+	 * 
+	 * @param upload UploadEntity 对象
+	 * @return Resource
+	 */
+	public Resource loadAsResource(UploadEntity upload) {
+		if (upload.getFileUrl() != null && !upload.getFileUrl().isEmpty()) {
+			// MinIO 直链（{endpoint}/{bucket}/{objectPath}）：经 MinIO 客户端下载到临时文件后返回资源，
+			// 否则本地存储逻辑无法识别该 URL，会回落到原始文件名导致 Invalid filename format
+			Resource minioResource = tryLoadFromMinio(upload.getFileUrl());
+			if (minioResource != null) {
+				return minioResource;
+			}
+			// 从 fileUrl 中提取相对路径
+			String relativePath = extractRelativePathFromUrl(upload.getFileUrl());
+			if (relativePath != null) {
+				return loadAsResource(relativePath);
+			}
+		}
+		// 如果 fileUrl 为空或提取失败，则使用 fileName
+		return loadAsResource(upload.getFileName());
+	}
+
+	/**
+	 * 尝试从 MinIO 加载文件资源：fileUrl 命中 {endpoint}/{bucket}/ 前缀时，
+	 * 经 MinIO 客户端鉴权下载到临时文件（不依赖桶公读策略）。
+	 * 未启用 MinIO、URL 不匹配或下载失败时返回 null，回落到本地存储查找。
+	 */
+	private Resource tryLoadFromMinio(String fileUrl) {
+		if (uploadMinioService == null || bytedeskProperties == null
+				|| !bytedeskProperties.isS3StorageEnabled()) {
+			return null;
+		}
+		String objectPath = extractMinioObjectPath(fileUrl);
+		if (!StringUtils.hasText(objectPath)) {
+			return null;
+		}
+		try {
+			String extension = BdUploadUtils.getFileExtension(objectPath);
+			String suffix = StringUtils.hasText(extension) ? "." + extension : ".tmp";
+			Path tempFile = Files.createTempFile("bytedesk-upload-minio-", suffix);
+			uploadMinioService.downloadObject(objectPath, tempFile);
+			tempFile.toFile().deleteOnExit();
+			log.info("Loaded MinIO object as resource: fileUrl={}, objectPath={}, tempFile={}",
+					fileUrl, objectPath, tempFile);
+			return new UrlResource(tempFile.toUri());
+		} catch (Exception e) {
+			log.warn("Failed to load MinIO object, fallback to local storage lookup. fileUrl={}, objectPath={}, reason={}",
+					fileUrl, objectPath, e.getMessage());
+			return null;
+		}
+	}
+
+	/**
+	 * 从 MinIO 直链 URL 提取对象路径：
+	 * http://127.0.0.1:19000/bytedesk/documents/xxx.xlsx → documents/xxx.xlsx
+	 */
+	private String extractMinioObjectPath(String fileUrl) {
+		String normalized = fileUrl == null ? null : fileUrl.trim();
+		String endpoint = trimTrailingSlash(bytedeskProperties.getStorageEndpoint());
+		String bucket = bytedeskProperties.getStorageBucketName() == null ? null
+				: bytedeskProperties.getStorageBucketName().trim();
+		if (normalized == null || normalized.isEmpty() || !StringUtils.hasText(endpoint) || !StringUtils.hasText(bucket)) {
+			return null;
+		}
+		String prefix = endpoint + "/" + bucket + "/";
+		if (!normalized.startsWith(prefix)) {
+			return null;
+		}
+		String objectPath = normalized.substring(prefix.length());
+		int queryIndex = objectPath.indexOf('?');
+		if (queryIndex >= 0) {
+			objectPath = objectPath.substring(0, queryIndex);
+		}
+		int fragmentIndex = objectPath.indexOf('#');
+		if (fragmentIndex >= 0) {
+			objectPath = objectPath.substring(0, fragmentIndex);
+		}
+		return StringUtils.hasText(objectPath) ? objectPath : null;
+	}
+
+	private String trimTrailingSlash(String value) {
+		if (value == null) {
+			return null;
+		}
+		String trimmed = value.trim();
+		while (trimmed.endsWith("/")) {
+			trimmed = trimmed.substring(0, trimmed.length() - 1);
+		}
+		return trimmed;
+	}
+
+	/**
+	 * 从文件URL中提取相对路径
+	 * 例如：http://127.0.0.1:9003/file/2025/09/05/1757039824330_8577.pdf 
+	 * 提取为：2025/09/05/1757039824330_8577.pdf
+	 * 
+	 * @param fileUrl 完整的文件URL
+	 * @return 相对路径，如果提取失败返回null
+	 */
+	private String extractRelativePathFromUrl(String fileUrl) {
+		return BdUploadUtils.extractRelativePathFromUrl(fileUrl);
+	}
+
+	/**
+	 * 加载文件资源
+	 * Resource resource2 = uploadRestService.loadAsResource("2025/09/05/1757039824330_8577.pdf");
+	 * 
+	 * @param filenameOrPath 文件名（如：20240916144702_身份证-背面.jpg）或完整路径（如：2025/09/05/1757039824330_8577.pdf）
+	 * @return Resource
+	 */
+	public Resource loadAsResource(String filenameOrPath) {
+		if (filenameOrPath == null || filenameOrPath.trim().isEmpty()) {
+			throw new UploadStorageFileNotFoundException("File path is empty");
+		}
+
+		String normalizedInput = filenameOrPath.trim();
+		// Accept full upload URL input and normalize it to relative storage path.
+		if (normalizedInput.startsWith("http://") || normalizedInput.startsWith("https://")) {
+			String relativePath = extractRelativePathFromUrl(normalizedInput);
+			if (relativePath != null && !relativePath.isEmpty()) {
+				normalizedInput = relativePath;
+				log.info("Normalized file URL to relative path: {} -> {}", filenameOrPath, normalizedInput);
+			}
+		}
+
+		String datePath;
+		String filename;
+		
+		// 判断是否包含路径分隔符
+		if (normalizedInput.contains("/")) {
+			// 包含路径分隔符，说明是完整路径格式：2025/09/05/filename.ext
+			int lastSlashIndex = normalizedInput.lastIndexOf("/");
+			datePath = normalizedInput.substring(0, lastSlashIndex);
+			filename = normalizedInput.substring(lastSlashIndex + 1);
+			log.info("Loading file from full path: {}, datePath: {}, filename: {}", normalizedInput, datePath, filename);
+		} else {
+			// 不包含路径分隔符，说明是文件名格式：20240916144702_身份证-背面.jpg
+			// 使用工具类提取日期路径
+			datePath = BdUploadUtils.extractDatePathFromTimestampFileName(normalizedInput);
+			if (datePath == null) {
+				throw new UploadStorageFileNotFoundException("Invalid filename format: " + normalizedInput);
+			}
+			filename = normalizedInput;
+			log.info("Loading file from filename: {}, extracted datePath: {}", normalizedInput, datePath);
+		}
+		
+		// 构建文件夹路径
+		Path dateFolderPath = this.uploadDir.resolve(datePath);
+
+		// 创建日期文件夹（如果不存在）
+		try {
+			Files.createDirectories(dateFolderPath);
+		} catch (IOException e) {
+			log.error("Failed to create directory: {}", dateFolderPath, e);
+		}
+
+		// 构建完整的文件路径
+		Path filePath = dateFolderPath.resolve(filename);
+		log.info("Full file path: {}", filePath);
+
+		try {
+			if (Files.exists(filePath)) {
+				Resource resource = new UrlResource(filePath.toUri());
+				if (resource.exists() || resource.isReadable()) {
+					log.info("Successfully loaded resource: {}", filePath);
+					return resource;
+				} else {
+					throw new UploadStorageFileNotFoundException(
+							"Could not read file: " + filename);
+				}
+			} else {
+				log.error("File does not exist: {}", filePath);
+				throw new UploadStorageFileNotFoundException(
+						"File not found: " + filename);
+			}
+		} catch (MalformedURLException e) {
+			throw new UploadStorageFileNotFoundException("Could not read file: " + filename, e);
+		}
+	}
+
+	public void initUploadDir() {
+		try {
+			Files.createDirectories(uploadDir);
+		} catch (IOException e) {
+			throw new UploadStorageException(
+				"初始化上传目录失败（请检查磁盘权限/路径配置）: " + (e.getMessage() == null ? "未知错误" : e.getMessage()),
+				503,
+				e
+			);
+		}
+	}
+
+	public void deleteFile(String filename) {
+		Path filePath = uploadDir.resolve(filename);
+		if (Files.exists(filePath)) {
+			try {
+				Files.delete(filePath);
+			} catch (IOException e) {
+				throw new RuntimeException("Failed to delete file: " + filename, e);
+			}
+		} else {
+			throw new RuntimeException(I18Consts.withArgs(I18Consts.I18N_FILE_NOT_FOUND, filename));
+		}
+	}
+
+	// 删除整个上传文件夹，危险操作，暂时注释掉
+	public void deleteAll() {
+		FileSystemUtils.deleteRecursively(uploadDir.toFile());
+	}
+
+	@Override
+	public void deleteByUid(String uid) {
+		Optional<UploadEntity> uploadOptional = findByUid(uid);
+		if (uploadOptional.isPresent()) {
+			uploadOptional.get().setDeleted(true);
+			save(uploadOptional.get());
+		} else {
+			throw new RuntimeException("Upload with uid '" + uid + "' not found");
+		}
+	}
+
+	@Override
+	public void delete(UploadRequest entity) {
+		deleteByUid(entity.getUid());
+	}
+
+	@Override
+	public UploadResponse convertToResponse(UploadEntity entity) {
+		return ConvertUtils.convertToUploadResponse(entity);
+	}
+
+	public UploadResponse handleFileUpload(MultipartFile file, UploadRequest request) {
+		return handleFileUpload(file, request, null);
+	}
+
+	public UploadResponse handleFileUpload(MultipartFile file, UploadRequest request, HttpServletRequest httpRequest) {
+		log.info("handleFileUpload fileName: {}, fileType: {}, kbType {}, extra {}", 
+			request.getFileName(), request.getFileType(), request.getKbType(), request.getExtra());
+
+		try {
+			if (file == null || file.isEmpty()) {
+				uploadSecurityLogger.logUploadFailure(file, request, "空文件", httpRequest);
+				throw new UploadStorageException("空文件，无法上传", 400);
+			}
+
+			// 1. 文件类型白名单校验
+			String originalFileName = file.getOriginalFilename();
+			if (originalFileName == null || originalFileName.trim().isEmpty()) {
+				uploadSecurityLogger.logUploadFailure(file, request, "文件名为空", httpRequest);
+				throw new UploadStorageException("文件名为空，无法上传", 400);
+			}
+			String safeFileName = filterAndRenameFileName(originalFileName);
+			String contentType = file.getContentType();
+			if (!isAllowedFileType(safeFileName, contentType)) {
+				String ext = getFileExt(safeFileName);
+				uploadSecurityLogger.logSecurityThreat(file, request, "ILLEGAL_FILE_TYPE", 
+					(ext == null || ext.isEmpty()) ? "不支持的文件类型" : ("不支持的文件类型: ." + ext), httpRequest);
+				String reason = (ext == null || ext.isEmpty()) ? "不支持的文件类型" : ("不支持的文件类型: ." + ext);
+				throw new UploadStorageException(reason, 415);
+			}
+
+			// 2. 文件大小限制
+			if (!isFileSizeValid(file.getSize())) {
+				uploadSecurityLogger.logUploadFailure(file, request, 
+					"文件过大，最大支持" + getFileSizeDescription(), httpRequest);
+				throw new UploadStorageException("文件过大，最大支持" + getFileSizeDescription(), 413);
+			}
+
+			// 3. 图片内容校验（防止伪造扩展名）
+			if (uploadSecurityConfig.isEnableImageValidation() && isImageFile(safeFileName, contentType)) {
+				try {
+					ImageIO.read(file.getInputStream());
+				} catch (Exception e) {
+					uploadSecurityLogger.logSecurityThreat(file, request, "FAKE_IMAGE", 
+						"图片内容校验失败", httpRequest);
+					throw new UploadStorageException("图片内容校验失败（文件可能已损坏或伪造扩展名）", 422);
+				}
+			}
+
+			UserEntity user = authService.getUser();
+			UserProtobuf userProtobuf = null;
+			if (user == null) {
+				userProtobuf = UserProtobuf.builder()
+					.uid(request.getVisitorUid())
+					.nickname(request.getVisitorNickname())
+					.avatar(request.getVisitorAvatar())
+					.build();
+			} else {
+				userProtobuf = UserConvertUtils.convertToUserProtobuf(user);
+				request.setUserUid(user.getUid());
+				request.setOrgUid(user.getOrgUid());
+			}
+
+			// 4. 存储文件并获取实际的文件URL
+			String fileUrl;
+			if (bytedeskProperties.isS3StorageEnabled()) {
+				log.info("S3 兼容对象存储已启用，使用对象存储保存文件");
+				fileUrl = storeToMinio(file, safeFileName, request);
+			} else {
+				log.info("MinIO 未启用，使用本地文件系统存储文件");
+				fileUrl = store(file, safeFileName, request);
+			}
+			if (fileUrl == null || fileUrl.trim().isEmpty()) {
+				throw new UploadStorageException("文件上传失败：未获取到文件地址", 503);
+			}
+
+			// 5. 从fileUrl中提取实际存储的文件名（用于日志记录）
+			String actualStoredFileName = fileUrl.substring(fileUrl.lastIndexOf("/") + 1);
+			log.info("实际存储的文件名: {}, 原始文件名: {}", actualStoredFileName, originalFileName);
+			
+			// 6. 设置到request中：fileName保留原始文件名，fileUrl包含安全处理后的路径
+			request.setFileName(originalFileName);  // 保留原始文件名供前端显示
+			request.setFileUrl(fileUrl);            // 实际存储路径（可能包含安全重命名）
+			request.setType(request.getKbType());
+			request.setUser(userProtobuf.toJson());
+			
+			UploadResponse response = create(request);
+			
+			// 记录成功日志
+			uploadSecurityLogger.logUploadSuccess(file, request, fileUrl, httpRequest);
+			
+			return response;
+			
+		} catch (UploadStorageException e) {
+			// 记录失败日志
+			uploadSecurityLogger.logUploadFailure(file, request, e.getMessage(), httpRequest);
+			throw e;
+		} catch (Exception e) {
+			// 记录失败日志
+			uploadSecurityLogger.logUploadFailure(file, request, "系统内部错误: " + e.getMessage(), httpRequest);
+			throw new UploadStorageException("文件上传失败: " + (e.getMessage() == null ? "系统内部错误" : e.getMessage()), 500, e);
+		}
+	}
+
+	// ==================== MinIO 存储方法 ====================
+
+	/**
+	 * 将文件存储到 MinIO
+	 * 
+	 * @param file MultipartFile 文件
+	 * @param fileName 文件名
+	 * @param request 上传请求
+	 * @return 文件访问URL
+	 */
+	public String storeToMinio(MultipartFile file, String fileName, UploadRequest request) {
+		// 检查 S3 兼容对象存储是否启用
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			throw new UploadStorageException("存储服务未启用（S3 对象存储）", 503);
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			throw new UploadStorageException("存储服务不可用（MinIO 未初始化）", 503);
+		}
+
+		try {
+			if (file == null || file.isEmpty()) {
+				throw new UploadStorageException("空文件，无法上传", 400);
+			}
+
+			// 文件名再次过滤，防止绕过
+			fileName = filterAndRenameFileName(fileName);
+			
+			// 文件类型白名单校验
+			String contentType = file.getContentType();
+			if (!isAllowedFileType(fileName, contentType)) {
+				String ext = getFileExt(fileName);
+				String reason = (ext == null || ext.isEmpty()) ? "不支持的文件类型" : ("不支持的文件类型: ." + ext);
+				throw new UploadStorageException(reason, 415);
+			}
+			
+			// 文件大小限制
+			if (!isFileSizeValid(file.getSize())) {
+				throw new UploadStorageException("文件过大，最大支持" + getFileSizeDescription(), 413);
+			}
+			
+			// 图片内容校验
+			if (uploadSecurityConfig.isEnableImageValidation() && isImageFile(fileName, contentType)) {
+				try {
+					ImageIO.read(file.getInputStream());
+				} catch (Exception e) {
+					throw new UploadStorageException("图片内容校验失败（文件可能已损坏或伪造扩展名）", 422);
+				}
+			}
+
+			// 根据文件类型选择存储文件夹
+			String folder = getMinioFolderByFileType(file, request);
+			
+			// 上传到 MinIO
+			String fileUrl = uploadMinioService.uploadFile(file, fileName, folder);
+			
+			log.info("文件已成功上传到 MinIO: {}", fileUrl);
+			return fileUrl;
+
+		} catch (UploadStorageException e) {
+			log.error("上传文件到 MinIO 失败: {}", e.getMessage(), e);
+			throw e;
+		} catch (Exception e) {
+			log.error("上传文件到 MinIO 失败: {}", e.getMessage(), e);
+			throw new UploadStorageException("存储服务异常（MinIO）: " + (e.getMessage() == null ? "未知错误" : e.getMessage()), 503, e);
+		}
+	}
+
+	/**
+	 * 将本地文件存储到 MinIO
+	 * 
+	 * @param localFilePath 本地文件路径
+	 * @param fileName 文件名
+	 * @param request 上传请求
+	 * @return 文件访问URL
+	 */
+	public String storeLocalFileToMinio(String localFilePath, String fileName, UploadRequest request) {
+		// 检查 S3 兼容对象存储是否启用
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			throw new UploadStorageException("存储服务未启用（S3 对象存储）", 503);
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			throw new UploadStorageException("存储服务不可用（MinIO 未初始化）", 503);
+		}
+
+		try {
+			File localFile = new File(localFilePath);
+			if (!localFile.exists()) {
+				throw new UploadStorageException("本地文件不存在: " + localFilePath, 404);
+			}
+
+			// 根据文件类型选择存储文件夹
+			String folder = getMinioFolderByFileName(fileName, request);
+			
+			// 上传到 MinIO
+			String fileUrl = uploadMinioService.uploadFile(localFile, fileName, folder);
+			
+			log.info("本地文件已成功上传到 MinIO: {}", fileUrl);
+			return fileUrl;
+
+		} catch (UploadStorageException e) {
+			log.error("上传本地文件到 MinIO 失败: {}", e.getMessage(), e);
+			throw e;
+		} catch (Exception e) {
+			log.error("上传本地文件到 MinIO 失败: {}", e.getMessage(), e);
+			throw new UploadStorageException(
+				"存储服务异常（MinIO）: " + (e.getMessage() == null ? "未知错误" : e.getMessage()),
+				503,
+				e
+			);
+		}
+	}
+
+	/**
+	 * 从 URL 下载并存储到 MinIO
+	 * 
+	 * @param url 文件URL
+	 * @param fileName 文件名
+	 * @param request 上传请求
+	 * @return 文件访问URL
+	 */
+	public String storeUrlToMinio(String url, String fileName, UploadRequest request) {
+		// 检查 S3 兼容对象存储是否启用
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			throw new UploadStorageException("存储服务未启用（S3 对象存储）", 503);
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			throw new UploadStorageException("存储服务不可用（MinIO 未初始化）", 503);
+		}
+
+		try {
+			// 根据文件类型选择存储文件夹
+			String folder = getMinioFolderByFileName(fileName, request);
+			
+			// 从 URL 下载并上传到 MinIO
+			String fileUrl = uploadMinioService.uploadFromUrl(url, fileName, folder);
+			
+			log.info("URL 文件已成功上传到 MinIO: {}", fileUrl);
+			return fileUrl;
+
+		} catch (UploadStorageException e) {
+			log.error("从 URL 上传文件到 MinIO 失败: {}", e.getMessage(), e);
+			throw e;
+		} catch (Exception e) {
+			log.error("从 URL 上传文件到 MinIO 失败: {}", e.getMessage(), e);
+			throw new UploadStorageException(
+				"从URL下载并上传失败: " + (e.getMessage() == null ? "未知错误" : e.getMessage()),
+				400,
+				e
+			);
+		}
+	}
+
+	/**
+	 * 根据文件类型和请求信息确定 MinIO 存储文件夹
+	 * 
+	 * @param file MultipartFile 文件
+	 * @param request 上传请求
+	 * @return 存储文件夹路径
+	 */
+	private String getMinioFolderByFileType(MultipartFile file, UploadRequest request) {
+		String contentType = file.getContentType();
+		String fileName = file.getOriginalFilename();
+		
+		// 使用工具类根据文件类型获取文件夹
+		String folder = BdUploadUtils.getFileFolderByType(fileName, contentType);
+		
+		// 根据请求类型进行特殊处理
+		if (request != null && request.getKbType() != null) {
+			switch (request.getKbType().toLowerCase()) {
+				case "avatar":
+					return "avatars";
+				case "attachment":
+					return "attachments";
+				default:
+					break;
+			}
+		}
+		
+		return folder;
+	}
+
+	/**
+	 * 根据文件名确定 MinIO 存储文件夹
+	 * 
+	 * @param fileName 文件名
+	 * @param request 上传请求
+	 * @return 存储文件夹路径
+	 */
+	private String getMinioFolderByFileName(String fileName, UploadRequest request) {
+		// 使用工具类根据文件类型获取文件夹
+		String folder = BdUploadUtils.getFileFolderByType(fileName, null);
+		
+		// 根据请求类型进行特殊处理
+		if (request != null && request.getKbType() != null) {
+			switch (request.getKbType().toLowerCase()) {
+				case "avatar":
+					return "avatars";
+				case "attachment":
+					return "attachments";
+				case "image":
+					return "images";
+				case "audio":
+					return "audios";
+				case "video":
+					return "videos";
+				case "document":
+					return "documents";
+				default:
+					break;
+			}
+		}
+		
+		return folder;
+	}
+
+	/**
+	 * 删除 MinIO 中的文件
+	 * 
+	 * @param objectPath 对象路径
+	 */
+	public void deleteFromMinio(String objectPath) {
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			throw new UploadStorageException("存储服务未启用（S3 对象存储）", 503);
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			throw new UploadStorageException("存储服务不可用（MinIO 未初始化）", 503);
+		}
+		
+		try {
+			uploadMinioService.deleteFile(objectPath);
+			log.info("成功删除 MinIO 文件: {}", objectPath);
+		} catch (Exception e) {
+			log.error("删除 MinIO 文件失败: {}", e.getMessage(), e);
+			throw new UploadStorageException(
+				"删除 MinIO 文件失败: " + (e.getMessage() == null ? "未知错误" : e.getMessage()),
+				503,
+				e
+			);
+		}
+	}
+
+	/**
+	 * 检查 MinIO 中文件是否存在
+	 * 
+	 * @param objectPath 对象路径
+	 * @return 是否存在
+	 */
+	public boolean fileExistsInMinio(String objectPath) {
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			return false;
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			return false;
+		}
+		
+		return uploadMinioService.fileExists(objectPath);
+	}
+
+	/**
+	 * 获取 MinIO 文件下载URL（预签名URL）
+	 * 
+	 * @param objectPath 对象路径
+	 * @param expiry 过期时间（秒）
+	 * @return 预签名URL
+	 */
+	public String getMinioDownloadUrl(String objectPath, int expiry) {
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			throw new UploadStorageException("存储服务未启用（S3 对象存储）", 503);
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			throw new UploadStorageException("存储服务不可用（MinIO 未初始化）", 503);
+		}
+		
+		return uploadMinioService.getDownloadUrl(objectPath, expiry);
+	}
+
+	/**
+	 * 获取 MinIO 文件上传URL（预签名URL）
+	 * 
+	 * @param objectPath 对象路径
+	 * @param expiry 过期时间（秒）
+	 * @return 预签名URL
+	 */
+	public String getMinioUploadUrl(String objectPath, int expiry) {
+		if (!bytedeskProperties.isS3StorageEnabled()) {
+			throw new UploadStorageException("存储服务未启用（S3 对象存储）", 503);
+		}
+
+		// 检查 MinIO 服务是否可用
+		if (uploadMinioService == null) {
+			throw new UploadStorageException("存储服务不可用（MinIO 未初始化）", 503);
+		}
+		
+		return uploadMinioService.getUploadUrl(objectPath, expiry);
+	}
+
+	
+	
+
+}

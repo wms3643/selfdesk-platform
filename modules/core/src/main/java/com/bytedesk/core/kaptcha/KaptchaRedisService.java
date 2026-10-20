@@ -1,0 +1,78 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-04-16 17:48:50
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-08 11:30:50
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.kaptcha;
+
+import java.time.Duration;
+import java.util.Locale;
+
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import com.bytedesk.core.config.properties.BytedeskProperties;
+import com.bytedesk.core.constant.RedisConsts;
+import com.bytedesk.core.enums.ChannelEnum;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class KaptchaRedisService {
+    
+    // 验证码5分钟过期
+    private static final long EXPIRE_TIME = 5; // 5分钟
+    
+    private final StringRedisTemplate stringRedisTemplate;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    public void putKaptcha(String key, String value) {
+        stringRedisTemplate.opsForValue().set(RedisConsts.KAPTCHA_PREFIX + key, value, Duration.ofMinutes(EXPIRE_TIME));
+    }
+
+    public Boolean hasKaptcha(String key) {
+        return stringRedisTemplate.hasKey(RedisConsts.KAPTCHA_PREFIX + key);
+    }
+
+    public String getKaptcha(String key) {
+        return stringRedisTemplate.opsForValue().get(RedisConsts.KAPTCHA_PREFIX + key);
+    }
+
+    public Boolean checkKaptcha(String key, String value, String channel) {
+        // 如果禁用验证码，则直接返回true
+        if (bytedeskProperties.isDisableCaptcha()) {
+            return true;
+        }
+        // 移动端及 uniapp 渠道验证码暂时不做校验
+        if (channel != null) {
+            String normalizedChannel = channel.toLowerCase(Locale.ROOT);
+            if (normalizedChannel.contains(ChannelEnum.FLUTTER.name().toLowerCase(Locale.ROOT))
+                    || normalizedChannel.contains(ChannelEnum.IOS.name().toLowerCase(Locale.ROOT))
+                    || normalizedChannel.contains(ChannelEnum.ANDROID.name().toLowerCase(Locale.ROOT))
+                    || normalizedChannel.contains(ChannelEnum.WECHAT_MINI.name().toLowerCase(Locale.ROOT))
+                    || normalizedChannel.contains(ChannelEnum.UNIAPP.name().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        // log.info("checkKaptcha key: " + key + ", value: " + value);
+        String cachedValue = stringRedisTemplate.opsForValue().get(RedisConsts.KAPTCHA_PREFIX + key);
+        return cachedValue != null && value != null && cachedValue.equalsIgnoreCase(value);
+    }
+
+    public void removeKaptcha(String key) {
+        stringRedisTemplate.delete(RedisConsts.KAPTCHA_PREFIX + key);
+    }
+
+}

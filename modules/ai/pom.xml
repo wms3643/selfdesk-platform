@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>com.bytedesk</groupId>
+		<artifactId>modules</artifactId>
+		<version>${revision}</version>
+	</parent>
+
+	<groupId>com.bytedesk</groupId>
+	<artifactId>bytedesk-module-ai</artifactId>
+	<version>${revision}</version>
+
+	<name>bytedesk-module-ai</name>
+	<description>https://www.bytedesk.com</description>
+
+	<properties>
+		<ollama4j.version>1.1.7</ollama4j.version>
+		<jsonp.version>1.22.2</jsonp.version>
+		<okhttp.version>4.12.0</okhttp.version>
+		<!-- <selenium.version>4.30.0</selenium.version> -->
+		<!-- <ai.djl.version>0.32.0</ai.djl.version> -->
+		<zai-sdk.version>0.3.5</zai-sdk.version>
+		<elasticsearch.version>9.4.2</elasticsearch.version>
+	</properties>
+
+	<dependencies>
+
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-autoconfigure-retry -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-autoconfigure-retry</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-retry -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-retry</artifactId>
+			<version>${spring-ai.version}</version>
+			<!-- 排除 io.swagger.core.v3:swagger-annotations 依赖 -->
+			<exclusions>
+				<exclusion>
+					<groupId>io.swagger.core.v3</groupId>
+					<artifactId>swagger-annotations-jakarta</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- rag -->
+		<!-- https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-vector-store-advisor -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-vector-store-advisor</artifactId>
+			<version>${spring-ai.version}</version>
+			<!-- 排除 io.swagger.core.v3:swagger-annotations 依赖 -->
+			<exclusions>
+				<exclusion>
+					<groupId>io.swagger.core.v3</groupId>
+					<artifactId>swagger-annotations-jakarta</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- Tool Search Advisor：LLM 按需动态发现工具（替代静态全量注册）。
+		     核心类 ToolSearchToolCallingAdvisor + RegexToolIndex/LuceneToolIndex/VectorToolIndex。
+		     2.0.0 官方坐标已确认存在，见 docs/plans/2026-08-12-tool-search-vector-store-advisor-plan.md。
+		     https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-tool-search-advisor -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-tool-search-advisor</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-rag -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-rag</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- llm -->
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat/openai-chat.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-openai -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- moonshot 已 vendor 到 modules/ai/src/main/java/org/springaicommunity/moonshot -->
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat/anthropic-chat.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-anthropic -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-anthropic</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- openai sdk Official -->
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat/openai-sdk-chat.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-openai-sdk -->
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-openai-sdk</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency> -->
+
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-ollama -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-ollama</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat/deepseek-chat.html -->
+		<!--https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-deepseek -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-deepseek</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- ZhipuAI now uses in-repo ai.z.openapi integration instead of Spring AI starter -->
+
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat/vertexai-gemini-chat.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-vertex-ai-gemini -->
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency> -->
+
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat/google-genai-chat.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-model-google-genai -->
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-google-genai</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency> -->
+
+		<!-- vector store -->
+		<!-- https://docs.spring.io/spring-ai/reference/api/vectordbs/elasticsearch.html -->
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-vector-store-elasticsearch -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-vector-store-elasticsearch</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- https://docs.spring.io/spring-ai/reference/api/vectordbs/pgvector.html -->
+		<!-- https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-starter-vector-store-pgvector -->
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-vector-store-pgvector</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency> -->
+
+		<!-- https://mvnrepository.com/artifact/org.elasticsearch.client/elasticsearch-rest-client -->
+		<dependency>
+			<groupId>org.elasticsearch.client</groupId>
+			<artifactId>elasticsearch-rest-client</artifactId>
+			<version>${elasticsearch.version}</version>
+		</dependency>
+
+		<!-- https://docs.spring.io/spring-ai/reference/api/chat-memory.html -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency>
+
+		<!-- MCP server/client 与 mcp/mcp_client/mcp_server/skill/tool/tool_audit/tool_call 等包 -->
+		<!-- 已迁移至 enterprise/ai（企业版/平台版功能），对应依赖 spring-ai-starter-mcp-server-webmvc -->
+		<!-- 与 spring-ai-starter-mcp-client 已同步迁移到 enterprise/ai/pom.xml -->
+
+		<!-- https://github.com/spring-ai-community/spring-ai-agent-utils -->
+		<!-- Source: https://mvnrepository.com/artifact/org.springaicommunity/spring-ai-agent-utils -->
+		<dependency>
+			<groupId>org.springaicommunity</groupId>
+			<artifactId>spring-ai-agent-utils</artifactId>
+			<version>0.10.0</version>
+		</dependency>
+
+		<!-- ///////////////////////////////////////////////////////////////////////////// -->
+
+		<dependency>
+			<groupId>com.bytedesk</groupId>
+			<artifactId>bytedesk-module-core</artifactId>
+			<version>${revision}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>com.bytedesk</groupId>
+			<artifactId>bytedesk-module-kbase</artifactId>
+			<version>${revision}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>com.bytedesk</groupId>
+			<artifactId>bytedesk-module-call</artifactId>
+			<version>${revision}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- ///////////////////////////////////////////////////////////////////////////// -->
+
+		<!-- https://github.com/dashscope/dashscope-sdk-java -->
+		<!-- https://mvnrepository.com/artifact/com.alibaba/dashscope-sdk-java -->
+		 <dependency>
+			<groupId>com.alibaba</groupId>
+			<artifactId>dashscope-sdk-java</artifactId>
+			<version>${dashscope-sdk-java.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>com.github.victools</groupId>
+					<artifactId>jsonschema-generator</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.slf4j</groupId>
+					<artifactId>slf4j-api</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>org.slf4j</groupId>
+					<artifactId>slf4j-simple</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- https://github.com/zai-org/z-ai-sdk-java -->
+		<!-- https://github.com/pengjinning/z-ai-sdk-java -->
+		<!-- https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3 -->
+		<!-- https://mvnrepository.com/artifact/ai.z.openapi/zai-sdk -->
+		<dependency>
+			<groupId>ai.z.openapi</groupId>
+			<artifactId>zai-sdk</artifactId>
+			<version>${zai-sdk.version}</version>
+		</dependency>
+		
+		<!-- https://github.com/ollama4j/ollama4j -->
+		<!-- https://ollama4j.github.io/ollama4j/intro -->
+		<!-- https://mvnrepository.com/artifact/io.github.ollama4j/ollama4j -->
+		<dependency>
+			<groupId>io.github.ollama4j</groupId>
+			<artifactId>ollama4j</artifactId>
+			<version>${ollama4j.version}</version>
+			<exclusions>
+				<!-- 排除旧版 MCP SDK，避免与 spring-ai-mcp 2.0.0 的 mcp-core 冲突 -->
+				<exclusion>
+					<groupId>io.modelcontextprotocol.sdk</groupId>
+					<artifactId>*</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- 抓取网页时使用 -->
+		<!-- https://jsoup.org/download -->
+		<!-- https://mvnrepository.com/artifact/org.jsoup/jsoup -->
+		<dependency>
+			<groupId>org.jsoup</groupId>
+			<artifactId>jsoup</artifactId>
+			<version>${jsonp.version}</version>
+		</dependency>
+
+		<!-- 一级缓存：工具注册表热路径本地缓存（ToolRegistryCacheService） -->
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+		</dependency>
+
+		<!-- ///////////////////////////////////////////////////////////////////////////// -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<!-- 添加Spring AI Chat Observation依赖 -->
+		<!--
+		https://mvnrepository.com/artifact/org.springframework.ai/spring-ai-autoconfigure-model-chat-observation -->
+		<!-- <dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-autoconfigure-model-chat-observation</artifactId>
+			<version>${spring-ai.version}</version>
+		</dependency> -->
+
+		<!-- 添加Micrometer依赖 -->
+		<!-- <dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-observation</artifactId>
+		</dependency> -->
+
+		<!-- Observability：micrometer-tracing-bridge-brave / zipkin-reporter-brave
+			已上移至 starter 的 spring-boot-starter-zipkin（Boot 4.1 专用 starter，含自动配置模块） -->
+
+		<!-- 分词、词频分析  -->
+		<!-- https://mvnrepository.com/artifact/org.ansj/ansj_seg -->
+		<!-- https://github.com/NLPchina/ansj_seg -->
+		<!-- <dependency>
+			<groupId>org.ansj</groupId>
+			<artifactId>ansj_seg</artifactId>
+			<version>5.1.6</version>
+		</dependency> -->
+
+		<!-- 中文分词 -->
+		<!-- https://github.com/houbb/segment -->
+		<!-- https://mvnrepository.com/artifact/com.github.houbb/segment -->
+		<dependency>
+			<groupId>com.github.houbb</groupId>
+			<artifactId>segment</artifactId>
+			<version>0.3.1</version>
+		</dependency>
+
+		<!-- OCR 图像文字识别 -->
+		<!-- https://mvnrepository.com/artifact/net.sourceforge.tess4j/tess4j -->
+		<!-- <dependency>
+			<groupId>net.sourceforge.tess4j</groupId>
+			<artifactId>tess4j</artifactId>
+			<version>5.16.0</version>
+		</dependency> -->
+
+	</dependencies>
+
+	<!-- https://docs.spring.io/spring-ai/reference/getting-started.html -->
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.ai</groupId>
+				<artifactId>spring-ai-bom</artifactId>
+				<version>${spring-ai.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<!-- https://github.com/alibaba/spring-ai-alibaba -->
+			<!-- 阶段 2：spring-ai-alibaba 依赖已停用，BOM 暂时注释保留便于回滚。
+			<dependency>
+				<groupId>com.alibaba.cloud.ai</groupId>
+				<artifactId>spring-ai-alibaba-bom</artifactId>
+				<version>${spring-ai-alibaba.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			-->
+			<!-- https://github.com/spring-ai-alibaba/spring-ai-extensions -->
+			<!-- <dependency>
+				<groupId>com.alibaba.cloud.ai</groupId>
+				<artifactId>spring-ai-alibaba-extensions-bom</artifactId>
+				<version>${spring-ai-alibaba-extensions.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency> -->
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<plugins>
+			<!-- <plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin> -->
+		</plugins>
+	</build>
+
+	
+
+</project>

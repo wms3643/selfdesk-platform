@@ -1,0 +1,395 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-01-16 14:56:28
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-18 16:38:23
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ticket.ticket;
+
+import java.util.List;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import com.bytedesk.core.utils.JsonResult;
+import com.bytedesk.ticket.ticket.dto.TicketHistoryActivityResponse;
+import com.bytedesk.ticket.ticket.dto.TicketHistoryProcessResponse;
+import com.bytedesk.ticket.ticket.dto.TicketHistoryTaskResponse;
+import com.bytedesk.ticket.ticket.dto.TicketTimelineStepResponse;
+import com.bytedesk.ticket.ticket.dto.TicketWorkflowTaskResponse;
+
+import io.swagger.v3.oas.annotations.Hidden;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v1/ticket")
+@AllArgsConstructor
+@Tag(name = "Ticket Workflow", description = "Ticket workflow APIs")
+public class TicketController {
+    
+    private final TicketService ticketService;
+
+    /**
+     * 查询当前流程实例的活动任务和可执行操作。
+     */
+    @GetMapping("/workflow/actions")
+    @Operation(summary = "查询工单工作流可执行动作")
+    public ResponseEntity<?> queryWorkflowActions(TicketRequest request) {
+
+        List<TicketWorkflowTaskResponse> actions = ticketService.queryWorkflowActions(request);
+
+        return ResponseEntity.ok(JsonResult.success(actions));
+    }
+
+    /**
+     * 按当前 Flowable 活动任务执行流程动作。
+     */
+    @PostMapping("/workflow/action")
+    @Operation(summary = "执行工单工作流动作")
+    public ResponseEntity<?> executeWorkflowAction(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.executeWorkflowAction(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 认领工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/claim")
+    @Operation(summary = "认领工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> claimTicket(@RequestBody TicketRequest request) {
+        
+        TicketResponse response = ticketService.claimTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 开始处理工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/start")
+    @Operation(summary = "开始处理工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> startTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.startTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 退回工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/unclaim")
+    @Operation(summary = "退回工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> unclaimTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.unclaimTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 转派工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/transfer")
+    @Operation(summary = "转派工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> transferTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.transferTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 挂起工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/hold")
+    @Operation(summary = "挂起工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> holdTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.holdTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 恢复工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/resume")
+    @Operation(summary = "恢复工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> resumeTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.resumeTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 待回应工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/pend")
+    @Operation(summary = "待回应工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> pendTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.pendTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 重新打开工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/reopen")
+    @Operation(summary = "重新打开工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> reopenTicket(@RequestBody TicketRequest request) {
+        
+        TicketResponse response = ticketService.reopenTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 升级工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/escalate")
+    @Operation(summary = "升级工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> escalateTicket(@RequestBody TicketRequest request) {
+        
+        TicketResponse response = ticketService.escalateTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 完成工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/resolve")
+    @Operation(summary = "完成工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> resolveTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.resolveTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 客户验证工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/verify")
+    @Operation(summary = "客户验证工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> verifyTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.verifyTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 关闭工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/close")
+    @Operation(summary = "关闭工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> closeTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.closeTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 取消工单
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/cancel")
+    @Operation(summary = "取消工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> cancelTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.cancelTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 委托工单任务
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/delegate")
+    @Operation(summary = "委托工单任务（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> delegateTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.delegateTicket(request);
+        
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 解决委托任务（被委托人处理完成后，归还给委托人）
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/delegate/resolve")
+    @Operation(summary = "解决委托任务（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> resolveDelegatedTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.resolveDelegatedTicket(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 抄送工单（知会相关人员，不参与流转）
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/cc")
+    @Operation(summary = "抄送工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> ccTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.ccTicket(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 加签（最小实现：为当前任务追加候选人）
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/addsign")
+    @Operation(summary = "加签工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> addSignTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.addSignTicket(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 退回（跳转回指定节点）
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/rollback")
+    @Operation(summary = "退回工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> rollbackTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.rollbackTicket(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 撤销（终止流程实例）
+     */
+    @Deprecated(since = "2026-07-29", forRemoval = false)
+    @Hidden
+    @PostMapping("/revoke")
+    @Operation(summary = "撤销工单（旧兼容入口，建议改用 /workflow/action）")
+    public ResponseEntity<?> revokeTicket(@RequestBody TicketRequest request) {
+
+        TicketResponse response = ticketService.revokeTicket(request);
+
+        return ResponseEntity.ok(JsonResult.success(response));
+    }
+
+    /**
+     * 查询工单任务历史
+     */
+    @GetMapping("/history/task")
+    @Operation(summary = "查询工单任务历史")
+    public ResponseEntity<?> queryTicketTaskHistory(TicketRequest request) {
+
+        List<TicketHistoryTaskResponse> histories = ticketService.queryTicketTaskHistory(request);
+
+        return ResponseEntity.ok(JsonResult.success(histories));
+    }
+
+    /**
+     * 查询工单流程实例历史
+     */
+    @GetMapping("/history/process")
+    @Operation(summary = "查询工单流程实例历史")
+    public ResponseEntity<?> queryTicketProcessHistory(TicketRequest request) {
+
+        List<TicketHistoryProcessResponse> histories = ticketService.queryTicketProcessHistory(request);
+
+        return ResponseEntity.ok(JsonResult.success(histories));
+    }
+
+    /**
+     * 查询工单活动历史
+     */
+    @GetMapping("/history/activity")
+    @Operation(summary = "查询工单活动历史")
+    public ResponseEntity<?> queryTicketActivityHistory(TicketRequest request) {
+
+        List<TicketHistoryActivityResponse> activities = ticketService.queryTicketActivityHistory(request);
+
+        return ResponseEntity.ok(JsonResult.success(activities));
+    }
+
+    /**
+     * 查询工单简化时间线
+     */
+    @GetMapping("/history/timeline")
+    @Operation(summary = "查询工单简化时间线")
+    public ResponseEntity<?> queryTicketTimeline(TicketRequest request) {
+
+        List<TicketTimelineStepResponse> activities = ticketService.queryTicketTimeline(request);
+
+        return ResponseEntity.ok(JsonResult.success(activities));
+    }
+
+    /**
+     * 工单卡片抽屉专用时间线：不受工单可见性限制。
+     */
+    @GetMapping("/history/timeline/card")
+    @Operation(summary = "查询工单卡片简化时间线")
+    public ResponseEntity<?> queryTicketTimelineForCard(TicketRequest request) {
+
+        List<TicketTimelineStepResponse> activities = ticketService.queryTicketTimelineForCard(request);
+
+        return ResponseEntity.ok(JsonResult.success(activities));
+    }
+
+    
+
+}

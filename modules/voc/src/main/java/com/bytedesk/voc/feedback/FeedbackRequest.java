@@ -1,0 +1,90 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-05-11 18:26:04
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-15 16:37:08
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.voc.feedback;
+
+import java.util.List;
+
+import com.bytedesk.core.base.BaseRequest;
+import com.bytedesk.core.black.BlacklistCheckable;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+import lombok.experimental.SuperBuilder;
+
+@Data
+@SuperBuilder
+@Accessors(chain = true)
+@EqualsAndHashCode(callSuper = false)
+@AllArgsConstructor
+@NoArgsConstructor
+public class FeedbackRequest extends BaseRequest implements BlacklistCheckable {
+
+    private static final long serialVersionUID = 1L;
+
+
+    private String title;
+
+    /**
+        * FeedbackSettings uid associated with this feedback
+     */
+        private String feedbackSettingsUid;
+
+    /**
+     * Satisfaction score (0-10)
+     */
+    private Integer score;
+
+    /**
+     * Multi-select reasons (max 3 by default)
+     */
+    private List<String> reasons;
+
+    /**
+     * Free-form comment
+     */
+    private String content;
+
+    /**
+     * Visitor session id (optional)
+     */
+    private String sid;
+
+    /**
+     * Source page url (optional)
+     */
+    private String pageUrl;
+
+    // @Builder.Default
+    // private String type = FeedbackTypeEnum.CUSTOMER.name();
+
+    // private String content;
+
+    private List<String> images;
+
+    private List<String> categoryNames;
+
+    private List<String> categoryUids;
+
+    /**
+     * 黑名单校验：匿名反馈无稳定访客身份，优先取请求中的 userUid，否则由 IP 黑名单兜底
+     */
+    @Override
+    public String getBlacklistOperatorUid() {
+        return getUserUid();
+    }
+
+}

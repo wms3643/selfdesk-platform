@@ -1,0 +1,120 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-01-16 14:58:38
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-25 16:02:49
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ticket.ticket;
+
+import java.time.ZonedDateTime;
+import java.util.List;
+import java.util.Set;
+
+import com.bytedesk.core.base.BaseResponse;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+import com.bytedesk.ticket.attachment.TicketAttachmentResponse;
+import com.bytedesk.ticket.ticket_sla_record.TicketSlaRecordResponse;
+import com.bytedesk.ticket.utils.TicketConvertUtils;
+
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+@Data
+@Builder
+@EqualsAndHashCode(callSuper = true)
+@NoArgsConstructor
+@AllArgsConstructor
+public class TicketResponse extends BaseResponse {
+
+    private static final long serialVersionUID = 1L;
+    // 
+    private String title;
+    // 问题描述
+    private String description;
+    // 联系称呼
+    private String contactName;
+    // 联系手机号
+    private String phone;
+    // 联系邮箱
+    private String email;
+    // 联系微信
+    private String wechat;
+    // 
+    private String ticketNumber;
+    // 
+    private String status;
+    private String priority;
+    private String type;
+    // 工单生成方式(手动/自动)
+    private String createType;
+    //
+    private String channel;
+    private String threadTopic;
+    // 工单对话
+    private String threadUid;
+
+    // 访客端未读消息数量（用于工单列表“对话”按钮角标显示）
+    private Integer visitorUnreadCount;
+
+    // 内部工单：关联的客服会话（非工单会话）
+    private String visitorThreadUid;
+    // 内部工单：关联的客服会话topic（非工单会话）
+    private String visitorThreadTopic;
+    // 
+    private String categoryUid;
+    // 工单分类名称（组织级分类名称，可能为 i18n key，由前端翻译显示）
+    private String categoryName;
+    private String workgroupUid;
+    private String departmentUid;
+    // 
+    // 工单处理人
+    // 使用UserProtobuf json格式化
+    private UserProtobuf assignee;
+    // 
+    // 工单提出者
+    // 使用UserProtobuf json格式化
+    private UserProtobuf reporter;
+    // 
+    private Set<TicketAttachmentResponse> attachments;
+
+    // 
+     private String ticketSettingsUid;
+    // 工单设置名称（可能为 i18n key，由前端翻译显示）
+    private String ticketSettingsName;
+    // 流程实例ID
+    private String processInstanceId;
+    // 流程定义实体UID，同时作为 Flowable 的 processDefinitionKey
+    private String processEntityUid;
+    // 流程定义名称（便于前端直接显示，可能为 i18n key，由前端翻译）
+    private String processEntityName;
+    private String formEntityUid;
+
+    // 客户验证
+    private Boolean verified;
+    // 解决时间
+    private ZonedDateTime resolvedTime;
+    // 关闭时间
+    private ZonedDateTime closedTime;
+    // 自定义表单 json schema
+    private String schema;
+
+    // 工单处理时长（秒）
+    private Long processingDuration;
+
+    private List<TicketSlaRecordResponse> slaRecords;
+    
+    // 
+    public static TicketResponse fromEntity(TicketEntity ticket) {
+        return TicketConvertUtils.convertToResponse(ticket);
+    }
+} 

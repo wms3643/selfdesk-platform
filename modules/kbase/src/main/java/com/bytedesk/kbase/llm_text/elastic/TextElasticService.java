@@ -1,0 +1,691 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2025-05-13 17:56:14
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-07-04 10:48:01
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license. 
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ * 
+ * Copyright (c) 2025 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.llm_text.elastic;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Pattern;
+
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
+import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.data.elasticsearch.core.query.DeleteQuery;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import com.bytedesk.kbase.llm_text.TextEntity;
+import com.bytedesk.kbase.llm_text.TextRequest;
+import com.bytedesk.kbase.llm_text.TextRestService;
+import com.bytedesk.kbase.llm_chunk.ChunkStatusEnum;
+import com.bytedesk.kbase.translation.KbaseTranslationEntity;
+import com.bytedesk.kbase.translation.KbaseTranslationRepository;
+import com.bytedesk.kbase.translation.KbaseTranslationSourceTypeEnum;
+import com.bytedesk.kbase.translation.KbaseTranslationStatusEnum;
+import com.bytedesk.kbase.utils.KbaseValidityFilterUtils;
+import com.bytedesk.core.utils.BdDateUtils;
+import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
+import co.elastic.clients.elasticsearch._types.query_dsl.MultiMatchQuery;
+import co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders;
+import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
+
+/**
+ * elasticsearch 全文检索服务
+ * @author jackning
+ */
+@RequiredArgsConstructor
+@Service
+@Slf4j
+public class TextElasticService {
+    
+    private final ElasticsearchOperations elasticsearchOperations;
+
+    private final TextRestService textRestService;
+
+    private final KbaseTranslationRepository kbaseTranslationRepository;
+
+    public Map<String, Object> queryElasticByUid(TextRequest request) {
+        String uid = request.getUid();
+        if (!StringUtils.hasText(uid)) {
+            throw new RuntimeException("uid is required");
+        }
+
+        boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+        TextElastic doc = null;
+        if (indexExists) {
+            doc = elasticsearchOperations.get(uid, TextElastic.class);
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("uid", uid);
+        result.put("indexExists", indexExists);
+        result.put("exists", doc != null);
+        result.put("doc", doc);
+        return result;
+    }
+    
+    // update elasticsearch index
+    public void updateIndex(TextRequest request) {
+        // 索引时需要读取 kbase.uid（kbUid），不使用缓存以避免 LAZY 关联丢失
+        Optional<TextEntity> textOpt = textRestService.findByUidWithKbaseNoCache(request.getUid());
+        if (textOpt.isPresent()) {
+            TextEntity text = textOpt.get();
+            indexText(text);
+        } else {
+            throw new IllegalArgumentException("Text not found with UID: " + request.getUid());
+        }
+    }
+
+    // update all elasticsearch index
+    public void updateAllIndex(TextRequest request) {
+        boolean superUser = Boolean.TRUE.equals(request.getSuperUser());
+        List<TextEntity> textList = superUser
+                ? textRestService.findAllNotDeletedNoCache()
+                : textRestService.findByKbUid(request.getKbUid());
+        textList.forEach(text -> {
+            indexText(text);
+        });
+        log.info("Updated elasticsearch index for {} texts, superUser={}, kbUid={}", textList.size(), superUser, request.getKbUid());
+    }
+
+    /**
+     * 同步Text的Elasticsearch索引状态到数据库
+     * - 如果索引不存在或文档不存在：elasticStatus 置为 NEW
+     * - 如果文档存在：elasticStatus 置为 SUCCESS
+     */
+    public TextEntity syncElasticStatus(TextRequest request) {
+        Optional<TextEntity> textOpt = textRestService.findByUidNoCache(request.getUid());
+        if (textOpt.isEmpty()) {
+            throw new RuntimeException("Text not found with UID: " + request.getUid());
+        }
+
+        TextEntity text = textOpt.get();
+
+        boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+        boolean docExists = indexExists && elasticsearchOperations.exists(text.getUid(), TextElastic.class);
+
+        String nextStatus = docExists ? ChunkStatusEnum.SUCCESS.name() : ChunkStatusEnum.NEW.name();
+        textRestService.updateElasticStatusOnly(text.getUid(), nextStatus);
+        textRestService.evictTextCacheAllEntries();
+
+        return textRestService.findByUidNoCache(text.getUid())
+                .orElseThrow(() -> new RuntimeException("Text not found with UID: " + text.getUid()));
+    }
+
+    /**
+     * 根据知识库kbUid批量同步Text的Elasticsearch索引状态到数据库
+     */
+    public Map<String, Object> syncElasticStatusByKbUid(TextRequest request) {
+        String kbUid = request.getKbUid();
+        boolean superUser = Boolean.TRUE.equals(request.getSuperUser());
+        if (!superUser && !StringUtils.hasText(kbUid)) {
+            throw new RuntimeException("kbUid is required");
+        }
+
+        List<TextEntity> textList = superUser
+                ? textRestService.findAllNotDeletedNoCache()
+                : textRestService.findByKbUidNoCache(kbUid);
+        boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+
+        int successCount = 0;
+        int newCount = 0;
+
+        for (TextEntity text : textList) {
+            boolean docExists = indexExists && elasticsearchOperations.exists(text.getUid(), TextElastic.class);
+            if (docExists) {
+                textRestService.updateElasticStatusOnly(text.getUid(), ChunkStatusEnum.SUCCESS.name());
+                successCount++;
+            } else {
+                textRestService.updateElasticStatusOnly(text.getUid(), ChunkStatusEnum.NEW.name());
+                newCount++;
+            }
+        }
+        textRestService.evictTextCacheAllEntries();
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("kbUid", kbUid);
+        result.put("superUser", superUser);
+        result.put("total", textList.size());
+        result.put("success", successCount);
+        result.put("new", newCount);
+        result.put("indexExists", indexExists);
+        return result;
+    }
+
+    /**
+     * 根据知识库kbUid一键删除Elasticsearch中的Text索引，并同步更新Text实体elasticStatus
+     */
+    public Map<String, Object> deleteAllIndexByKbUidAndSyncStatus(TextRequest request) {
+        String kbUid = request.getKbUid();
+        boolean superUser = Boolean.TRUE.equals(request.getSuperUser());
+        if (!superUser && !StringUtils.hasText(kbUid)) {
+            throw new RuntimeException("kbUid is required");
+        }
+
+        List<TextEntity> textList = superUser
+                ? textRestService.findAllNotDeletedNoCache()
+                : textRestService.findByKbUidNoCache(kbUid);
+        boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+
+        long deletedCount = 0;
+        if (indexExists) {
+                Query query = superUser
+                    ? NativeQuery.builder().withQuery(QueryBuilders.matchAll().build()._toQuery()).build()
+                    : NativeQuery.builder()
+                        .withQuery(QueryBuilders.term().field("kbUid").value(kbUid).build()._toQuery())
+                        .build();
+            DeleteQuery deleteQuery = DeleteQuery.builder(query).build();
+            var response = elasticsearchOperations.delete(deleteQuery, TextElastic.class);
+            deletedCount = response.getDeleted();
+        }
+
+        for (TextEntity text : textList) {
+            textRestService.updateElasticStatusOnly(text.getUid(), ChunkStatusEnum.NEW.name());
+        }
+        textRestService.evictTextCacheAllEntries();
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("kbUid", kbUid);
+        result.put("superUser", superUser);
+        result.put("total", textList.size());
+        result.put("indexExists", indexExists);
+        result.put("deletedCount", deletedCount);
+        return result;
+    }
+
+    /**
+     * 删除Text在Elasticsearch中的索引，并同步更新数据库状态
+     */
+    public Boolean deleteIndexAndSyncStatus(TextRequest request) {
+        Optional<TextEntity> textOpt = textRestService.findByUidNoCache(request.getUid());
+        if (textOpt.isEmpty()) {
+            throw new RuntimeException("Text not found with UID: " + request.getUid());
+        }
+
+        TextEntity text = textOpt.get();
+
+        boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+        if (!indexExists) {
+            textRestService.updateElasticStatusOnly(text.getUid(), ChunkStatusEnum.NEW.name());
+            textRestService.evictTextCacheAllEntries();
+            return true;
+        }
+
+        Boolean deleted = deleteText(request.getUid());
+        if (Boolean.TRUE.equals(deleted)) {
+            textRestService.updateElasticStatusOnly(text.getUid(), ChunkStatusEnum.NEW.name());
+        } else {
+            textRestService.updateElasticStatusOnly(text.getUid(), ChunkStatusEnum.ERROR.name());
+        }
+        textRestService.evictTextCacheAllEntries();
+        return deleted;
+    }
+
+    
+    /**
+     * 索引Text实体到Elasticsearch
+     * @param text 要索引的Text实体
+     */
+    public void indexText(TextEntity text) {
+        try {
+            if (text == null) {
+                log.warn("索引Text时参数text为空，跳过索引");
+                return;
+            }
+
+            final String textUid = text.getUid();
+            if (!StringUtils.hasText(textUid)) {
+                log.warn("索引Text时uid为空，跳过索引: title={}", text.getTitle());
+                return;
+            }
+
+            // 写入守卫：已过期内容不写入全文索引，删除可能存在的旧文档（幂等，含翻译文档），状态置 EXPIRED，静默返回
+            // 不抛异常，保证批量重建不被单条过期内容中断；复活靠 UpdateDocEvent 自动重建
+            if (text.isExpired()) {
+                log.info("Text已过期，跳过全文索引并删除旧文档: uid={}, endDate={}", textUid, text.getEndDate());
+                try {
+                    deleteText(textUid);
+                    deleteTranslatedTextDocuments(textUid);
+                } catch (Exception delEx) {
+                    log.warn("删除过期Text全文文档失败（将继续置EXPIRED）: uid={}, error={}", textUid, delEx.getMessage());
+                }
+                textRestService.updateElasticStatusOnly(textUid, ChunkStatusEnum.EXPIRED.name());
+                return;
+            }
+            // 未生效（startDate > now）：照常写入索引，检索期过滤会排除
+
+            // 若事件/缓存传入的实体缺少 kbase 关联，则回源数据库（join fetch）补齐
+            if (text.getKbase() == null) {
+                textRestService.findByUidWithKbaseNoCache(textUid).ifPresent(textFromDb -> {
+                    // 仅在缺失时回填，避免覆盖调用方已持有的实体
+                    if (text.getKbase() == null) {
+                        text.setKbase(textFromDb.getKbase());
+                    }
+                });
+            }
+
+            // 首先检查索引是否存在，如果不存在则创建
+            boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+            if (!indexExists) {
+                log.info("索引不存在: {}，正在创建...", TextElastic.class.getAnnotation(org.springframework.data.elasticsearch.annotations.Document.class).indexName());
+                // 创建索引
+                boolean created = elasticsearchOperations.indexOps(TextElastic.class).create();
+                // 创建映射
+                boolean mapped = elasticsearchOperations.indexOps(TextElastic.class).putMapping();
+                log.info("索引创建结果: {}, 映射创建结果: {}", created, mapped);
+                
+                if (!(created && mapped)) {
+                    log.error("索引创建失败，无法继续索引文档: {}", textUid);
+                    return;
+                }
+            } else {
+                // 存量索引可能缺少 startDate/endDate 等 keyword 字段映射：
+                // 若不补映射，新字段会走动态映射（text 分词），导致有效期 range 词法比较失配。
+                // putMapping 幂等（已有相同字段 no-op，仅新增字段）；历史类型冲突（如 date→keyword）会抛错，
+                // 此时需要删除整个索引后重建。
+                try {
+                    elasticsearchOperations.indexOps(TextElastic.class).putMapping();
+                } catch (Exception mapEx) {
+                    log.warn("补齐Text索引映射失败（可能存在历史类型冲突，请删除索引后全量重建）: {}, error={}",
+                            textUid, mapEx.getMessage());
+                }
+            }
+            
+            // 检查文档是否已存在
+            boolean exists = elasticsearchOperations.exists(textUid, TextElastic.class);
+            
+            if (exists) {
+                log.info("更新已存在的Text索引: {}", textUid);
+            } else {
+                log.info("为Text创建新索引: {}", textUid);
+            }
+            
+            // 将TextEntity转换为TextElastic对象
+            TextElastic textElastic = TextElastic.fromEntity(text);
+
+            if (textElastic != null && !StringUtils.hasText(textElastic.getKbUid())) {
+                log.warn("Text索引文档kbUid为空，可能导致按kbUid过滤搜索命中0: textUid={}, title={}", textUid, text.getTitle());
+            }
+            
+            // 将文档索引到Elasticsearch
+            elasticsearchOperations.save(textElastic);
+            reindexTranslatedTexts(text);
+            
+            if (exists) {
+                log.info("Text索引更新成功: {}", textUid);
+            } else {
+                log.info("Text索引创建成功: {}", textUid);
+            }
+
+            // 将索引结果保存到数据库中
+            text.setElasticSuccess();
+            textRestService.save(text);
+
+        } catch (Exception e) {
+            // 注意：这里不要再访问 text.getUid()，避免异常路径上出现额外NPE
+            log.error("索引Text时发生错误: {}, 错误消息: {}", (text == null ? null : text.getUid()), e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * 从Elasticsearch中删除Text的索引
+     * @param textUid 要删除的Text的UID
+     * @return 是否删除成功
+     */
+    public Boolean deleteText(String textUid) {
+        log.info("从索引中删除Text: {}", textUid);
+        
+        try {
+            // 首先检查文档是否存在
+            boolean exists = elasticsearchOperations.exists(textUid, TextElastic.class);
+            if (!exists) {
+                log.warn("索引中不存在此Text文档: {}", textUid);
+                return true; // 文档不存在也视为删除成功
+            }
+            
+            // 删除文档
+            elasticsearchOperations.delete(textUid, TextElastic.class);
+            log.info("Text索引删除成功: {}", textUid);
+            return true;
+        } catch (Exception e) {
+            log.error("删除Text索引时发生错误: {}, 错误消息: {}", textUid, e.getMessage(), e);
+            return false;
+        }
+    }
+
+        private void reindexTranslatedTexts(TextEntity text) {
+        deleteTranslatedTextDocuments(text.getUid());
+
+        String kbUid = text.getKbase() != null ? text.getKbase().getUid() : null;
+        if (!StringUtils.hasText(kbUid)) {
+            return;
+        }
+
+        List<KbaseTranslationEntity> translations = kbaseTranslationRepository
+            .findByKbase_UidAndSourceUidAndSourceTypeAndDeletedFalse(
+                kbUid,
+                text.getUid(),
+                KbaseTranslationSourceTypeEnum.TEXT.name());
+
+        translations.stream()
+            .filter(translation -> Boolean.TRUE.equals(translation.getEnabled()))
+            .filter(translation -> KbaseTranslationStatusEnum.SUCCESS.name().equals(translation.getTranslateStatus()))
+            .filter(translation -> StringUtils.hasText(translation.getTargetLanguage()))
+            .filter(translation -> StringUtils.hasText(translation.getTitle())
+                || StringUtils.hasText(translation.getContent())
+                || StringUtils.hasText(translation.getSummary()))
+            .forEach(translation -> elasticsearchOperations.save(TextElastic.fromTranslation(text, translation)));
+        }
+
+        // public 供过期清理任务（KbaseExpiryTask）按 sourceUid 联动删除翻译文档
+        public void deleteTranslatedTextDocuments(String sourceUid) {
+        if (!StringUtils.hasText(sourceUid)) {
+            return;
+        }
+
+        Query query = NativeQuery.builder()
+            .withQuery(QueryBuilders.bool()
+                .filter(QueryBuilders.term().field("sourceUid").value(sourceUid).build()._toQuery())
+                .filter(QueryBuilders.term().field("translated").value(true).build()._toQuery())
+                .build()._toQuery())
+            .build();
+
+        elasticsearchOperations.delete(DeleteQuery.builder(query).build(), TextElastic.class);
+        }
+    
+    /**
+     * 根据知识库UID删除所有相关Text索引
+     * @param kbUid 知识库UID
+     * @return 是否删除成功
+     */
+    public Boolean deleteByKbUid(String kbUid) {
+        log.info("删除知识库下所有Text索引: {}", kbUid);
+        
+        try {
+            // 首先创建查询
+            Query query = NativeQuery.builder()
+                    .withQuery(QueryBuilders.term()
+                        .field("kbUid")
+                        .value(kbUid)
+                        .build()._toQuery())
+                    .build();
+                    
+            // 创建DeleteQuery对象
+            DeleteQuery deleteQuery = DeleteQuery.builder(query).build();
+            
+            // 执行删除操作并获取响应
+            var response = elasticsearchOperations.delete(deleteQuery, TextElastic.class);
+            
+            // 记录删除的文档数量
+            log.info("成功删除知识库下的Text索引数量: {}", response.getDeleted());
+            return true;
+        } catch (Exception e) {
+            log.error("删除知识库下的Text索引时发生错误: {}, 错误消息: {}", kbUid, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 搜索Text内容
+     * @param query 查询关键词
+     * @param kbUid 知识库UID（可选）
+     * @param categoryUid 分类UID（可选）
+     * @param orgUid 组织UID（可选）
+     * @return Text搜索结果列表
+     */
+    public List<TextElasticSearchResult> searchTexts(String query, String kbUid, String categoryUid, String orgUid) {
+        log.info("搜索Texts: query={}, kbUid={}, categoryUid={}, orgUid={}", query, kbUid, categoryUid, orgUid);
+        return searchTexts(query, kbUid, categoryUid, orgUid, 10, null);
+    }
+
+    /**
+     * 搜索Text内容（可选限制返回数量）
+     *
+     * @param maxResults 最大结果数，为null则不限制
+     */
+    public List<TextElasticSearchResult> searchTexts(String query, String kbUid, String categoryUid, String orgUid, Integer maxResults) {
+        log.info("搜索Texts: query={}, kbUid={}, categoryUid={}, orgUid={}, maxResults={}", query, kbUid, categoryUid, orgUid, maxResults);
+        return searchTexts(query, kbUid, categoryUid, orgUid, maxResults, null);
+    }
+
+    public List<TextElasticSearchResult> searchTexts(String query, String kbUid, String categoryUid, String orgUid,
+            Integer maxResults, List<String> preferredLanguages) {
+        log.info("搜索Texts: query={}, kbUid={}, categoryUid={}, orgUid={}, maxResults={}, preferredLanguages={}",
+                query, kbUid, categoryUid, orgUid, maxResults, preferredLanguages);
+        return searchTextsInternal(query, kbUid, categoryUid, orgUid, false, maxResults, preferredLanguages);
+    }
+
+    /**
+     * 用户在输入过程中，给出输入联想
+     * @param request 请求参数
+     * @return Text搜索结果列表
+     */
+    public List<TextElasticSearchResult> suggestTexts(TextRequest request) {
+        String query = request.getContent();
+        String kbUid = request.getKbUid();
+        String orgUid = request.getOrgUid();
+        
+        log.info("联想Texts: query={}, kbUid={}, orgUid={}", query, kbUid, orgUid);
+        
+        List<TextElasticSearchResult> results = searchTextsInternal(query, kbUid, null, orgUid, true, 10, null);
+        log.info("Text联想完成，找到{}条结果", results.size());
+        return results;
+    }
+
+    /**
+     * 搜索Text内容 - 私有辅助方法，处理搜索和联想的共同逻辑
+     * 
+     * @param query 搜索关键词
+     * @param kbUid 知识库UID（可选）
+     * @param categoryUid 分类UID（可选）
+     * @param orgUid 组织UID（可选）
+     * @param isSuggest 是否为输入联想模式
+     * @param maxResults 最大结果数，为null则不限制
+     * @return 搜索结果列表
+     */
+    private List<TextElasticSearchResult> searchTextsInternal(
+            String query, 
+            String kbUid, 
+            String categoryUid, 
+            String orgUid, 
+            boolean isSuggest,
+            Integer maxResults,
+            List<String> preferredLanguages) {
+        
+        if (query == null || query.trim().isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        try {
+            // 首先检查索引是否存在
+            boolean indexExists = elasticsearchOperations.indexOps(TextElastic.class).exists();
+            if (!indexExists) {
+                log.warn("索引不存在: {}，请先创建索引", TextElastic.class.getAnnotation(org.springframework.data.elasticsearch.annotations.Document.class).indexName());
+                return new ArrayList<>();
+            }
+            
+            // 注意：这里不再需要转义，因为在搜索模式下使用的是MultiMatch查询
+            
+            // 构建查询条件
+            BoolQuery.Builder boolQueryBuilder = new BoolQuery.Builder();
+            
+            // 根据搜索模式构建不同的查询
+            if (isSuggest) {
+                // 联想模式 - 使用前缀匹配
+                // 在内容中查找前缀匹配
+                boolQueryBuilder.should(QueryBuilders.matchPhrasePrefix()
+                    .field("content")
+                    .query(query)
+                    .boost(3.0f)
+                    .build()._toQuery());
+                    
+                // 在名称中查找前缀匹配
+                boolQueryBuilder.should(QueryBuilders.matchPhrasePrefix()
+                    .field("title")
+                    .query(query)
+                    .boost(2.0f)
+                    .build()._toQuery());
+                    
+                // 在标签中查找
+                boolQueryBuilder.should(QueryBuilders.matchPhrasePrefix()
+                    .field("tagList")
+                    .query(query)
+                    .boost(1.0f)
+                    .build()._toQuery());
+            } else {
+                // 完整搜索模式 - 使用多字段匹配
+                MultiMatchQuery multiMatchQuery = QueryBuilders.multiMatch()
+                    .query(query)
+                    .fields("content^3", "title^2")
+                    .fuzziness("AUTO")
+                    .build();
+                boolQueryBuilder.must(multiMatchQuery._toQuery());
+            }
+            
+            // 添加过滤条件：启用状态
+            boolQueryBuilder.filter(QueryBuilders.term().field("enabled").value(true).build()._toQuery());
+            
+            // 有效期过滤（null 容忍：字段缺失视为无边界，兼容存量未重建文档）
+            // 有效 = (startDate 缺失 或 startDate <= now) AND (endDate 缺失 或 endDate >= now)
+            String nowStr = BdDateUtils.formatDatetimeToString(BdDateUtils.now());
+            boolQueryBuilder.filter(KbaseValidityFilterUtils.validityFilterQuery(nowStr));
+            
+            // 添加可选的过滤条件：知识库、分类、组织
+            if (kbUid != null && !kbUid.isEmpty()) {
+                boolQueryBuilder.filter(QueryBuilders.term().field("kbUid").value(kbUid).build()._toQuery());
+            }
+            
+            if (categoryUid != null && !categoryUid.isEmpty() && !isSuggest) {
+                boolQueryBuilder.filter(QueryBuilders.term().field("categoryUid").value(categoryUid).build()._toQuery());
+            }
+            
+            if (orgUid != null && !orgUid.trim().isEmpty()) {
+                boolQueryBuilder.filter(QueryBuilders.term().field("orgUid").value(orgUid).build()._toQuery());
+            }
+
+            if (preferredLanguages != null && !preferredLanguages.isEmpty()) {
+                BoolQuery.Builder languageQuery = new BoolQuery.Builder();
+                preferredLanguages.stream()
+                        .filter(StringUtils::hasText)
+                        .map(s -> s.trim())
+                        .map(s -> s.toUpperCase())
+                        .forEach(language -> languageQuery.should(
+                                QueryBuilders.term().field("language").value(language).build()._toQuery()));
+                languageQuery.minimumShouldMatch("1");
+                boolQueryBuilder.filter(languageQuery.build()._toQuery());
+            }
+            
+            // 构建最终查询
+            var searchQueryBuilder = NativeQuery.builder()
+                    .withQuery(boolQueryBuilder.build()._toQuery());
+            
+            // 如果指定了最大结果数，则添加限制
+            if (maxResults != null && maxResults > 0) {
+                searchQueryBuilder.withMaxResults(maxResults);
+            }
+            
+            Query searchQuery = searchQueryBuilder.build();
+            
+            // 执行搜索
+            SearchHits<TextElastic> searchHits = 
+                elasticsearchOperations.search(searchQuery, TextElastic.class);
+            log.debug("搜索完成，命中数: {}", searchHits.getTotalHits());
+            
+            List<TextElasticSearchResult> results = new ArrayList<>();
+            
+            // 处理搜索结果
+            for (SearchHit<TextElastic> hit : searchHits) {
+                TextElastic textElastic = hit.getContent();
+                float score = hit.getScore();
+                
+                // 创建结果对象
+                TextElasticSearchResult result = TextElasticSearchResult.builder()
+                    .textElastic(textElastic)
+                    .score(score)
+                    .build();
+                
+                // 处理高亮
+                applyHighlighting(result, query, textElastic);
+                
+                results.add(result);
+            }
+            
+            return results;
+        } catch (Exception e) {
+            log.error("Text搜索失败: query={}, 错误类型={}, 错误消息={}", 
+                query, e.getClass().getName(), e.getMessage(), e);
+            return new ArrayList<>();
+        }
+    }
+    
+    /**
+     * 为搜索结果添加高亮
+     */
+    private void applyHighlighting(TextElasticSearchResult result, String query, TextElastic textElastic) {
+        // 转义正则表达式特殊字符
+        String queryEscaped = Pattern.quote(query);
+        
+        // 手动添加内容高亮
+        String content = textElastic.getContent();
+        if (content != null && !content.trim().isEmpty() && query != null && !query.isEmpty()) {
+            // 在包含查询词的部分手动添加高亮标签
+            if (content.toLowerCase().contains(query.toLowerCase())) {
+                int index = content.toLowerCase().indexOf(query.toLowerCase());
+                int start = Math.max(0, index - 50);
+                int end = Math.min(content.length(), index + query.length() + 50);
+                String snippet = content.substring(start, end);
+                
+                // 添加高亮标记
+                String highlighted = snippet.replaceAll(
+                    "(?i)" + queryEscaped,
+                    "<em>" + query + "</em>"
+                );
+                
+                result.setHighlightedContent(highlighted);
+            } else {
+                // 如果没有直接匹配，使用前100个字符
+                result.setHighlightedContent(content.length() > 100 ? 
+                    content.substring(0, 100) + "..." : content);
+            }
+        }
+        
+        // 手动添加名称高亮
+        String title = textElastic.getTitle();
+        if (title != null && !title.trim().isEmpty() && query != null && !query.isEmpty()) {
+            // 在包含查询词的部分手动添加高亮标签
+            if (title.toLowerCase().contains(query.toLowerCase())) {
+                int index = title.toLowerCase().indexOf(query.toLowerCase());
+                int start = Math.max(0, index - 20);
+                int end = Math.min(title.length(), index + query.length() + 20);
+                String snippet = title.substring(start, end);
+                
+                // 添加高亮标记
+                String highlighted = snippet.replaceAll(
+                    "(?i)" + queryEscaped,
+                    "<em>" + query + "</em>"
+                );
+                
+                result.setHighlightedName(highlighted);
+            } else {
+                result.setHighlightedName(title);
+            }
+        } else if (title != null) {
+            result.setHighlightedName(title);
+        }
+    }
+}

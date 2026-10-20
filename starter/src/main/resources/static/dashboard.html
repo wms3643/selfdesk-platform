@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SelfDesk 运营仪表盘</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #F1F4F3; color: #4A5551;
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: grid; place-items: center;
+    }
+    .card {
+      background: #fff; border: 1px solid #E3E8E6; border-radius: 16px;
+      padding: 28px 32px; text-align: center; box-shadow: 0 24px 60px -32px rgba(14,21,19,.28);
+    }
+    .mark {
+      width: 38px; height: 38px; border-radius: 12px; background: #0E7A68;
+      display: grid; place-items: center; margin: 0 auto 14px;
+    }
+    h1 { font-size: 16px; font-weight: 500; color: #0E1513; margin: 0 0 6px; }
+    p { font-size: 12.5px; color: #7C8781; margin: 0; line-height: 1.6; }
+    a { color: #0E7A68; text-decoration: none; font-size: 12.5px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true">
+        <path d="M4.6 7.2A3.6 3.6 0 0 1 8.2 3.6h7.6a3.6 3.6 0 0 1 3.6 3.6v4.6a3.6 3.6 0 0 1-3.6 3.6h-3.9l-4.1 3.3v-3.4A3.6 3.6 0 0 1 4.6 11.8V7.2Z" fill="#fff"/>
+        <circle cx="9.1" cy="9.4" r="1.05" fill="#0E7A68"/>
+        <circle cx="12" cy="9.4" r="1.05" fill="#0E7A68"/>
+        <circle cx="14.9" cy="9.4" r="1.05" fill="#0E7A68"/>
+      </svg>
+    </div>
+    <h1>正在打开运营仪表盘</h1>
+    <p>看板已统一到 <a href="http://127.0.0.1:8002/">127.0.0.1:8002</a>，正在跳转…</p>
+  </div>
+  <script>
+    // 只保留一个仪表盘实现（8002），这里做兼容跳转，避免两套看板各写一遍
+    location.replace(location.protocol + "//" + location.hostname + ":8002/");
+  </script>
+</body>
+</html>

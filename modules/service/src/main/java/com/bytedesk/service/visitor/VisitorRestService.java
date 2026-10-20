@@ -1,0 +1,425 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-07 16:30:16
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.service.visitor;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.function.Supplier;
+import org.modelmapper.ModelMapper;
+import org.springframework.cache.annotation.Caching;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.annotation.Description;
+
+import com.bytedesk.core.base.BaseRestServiceWithExport;
+import com.bytedesk.core.constant.AvatarConsts;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.enums.ChannelEnum;
+import com.bytedesk.core.exception.NotFoundException;
+import com.bytedesk.core.message.MessageProtobuf;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.service.robot_to_agent_settings.event.VisitorRobotMessageEvent;
+import com.bytedesk.service.routing_strategy.ThreadRoutingContext;
+import com.bytedesk.service.utils.ServiceConvertUtils;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+@Description("Visitor Management Service - Visitor information and interaction management service")
+public class VisitorRestService extends BaseRestServiceWithExport<VisitorEntity, VisitorRequest, VisitorResponse, VisitorExcel> {
+
+    private static final Duration ONLINE_HEARTBEAT_UPDATE_INTERVAL = Duration.ofSeconds(60);
+
+    // 访客状态更新（心跳上线/定时离线）并发冲突时的最大尝试次数
+    private static final int STATUS_UPDATE_MAX_ATTEMPTS = 3;
+
+    private final VisitorRepository visitorRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final UidUtils uidUtils;
+
+    private final ThreadRoutingContext threadRoutingContext;
+
+    private final ApplicationEventPublisher applicationEventPublisher;
+
+    private final PlatformTransactionManager transactionManager;
+
+    @Override
+    protected Specification<VisitorEntity> createSpecification(VisitorRequest request) {
+        return VisitorSpecification.search(request, authService);
+    }
+
+    @Override
+    protected Page<VisitorEntity> executePageQuery(Specification<VisitorEntity> spec, Pageable pageable) {
+        return visitorRepository.findAll(spec, pageable);
+    }
+
+    @Override
+    public VisitorResponse create(VisitorRequest request) {
+        String visitorUid = StringUtils.hasText(request.getVisitorUid()) ? request.getVisitorUid().trim() : null;
+        String orgUid = request.getOrgUid();
+        log.info("visitor init, visitorUid: {}, orgUid: {}", visitorUid, orgUid);
+        Optional<VisitorEntity> visitorOptional = StringUtils.hasText(visitorUid)
+                ? findByVisitorUidAndOrgUid(visitorUid, orgUid)
+                : Optional.empty();
+        if (visitorOptional.isPresent()) {
+            VisitorEntity visitor = visitorOptional.get();
+            applyRequestToVisitor(visitor, request);
+
+            VisitorEntity savedVisitor;
+            try {
+                savedVisitor = executeInNewTransaction(() -> visitorRepository.saveAndFlush(visitor));
+            } catch (ObjectOptimisticLockingFailureException e) {
+                log.warn("visitor optimistic lock conflict for visitorUid {}, retrying with latest row", visitorUid);
+                savedVisitor = retrySaveExistingVisitor(visitorUid, orgUid, request, e);
+            }
+            if (savedVisitor == null) {
+                throw new RuntimeException("visitor not saved");
+            }
+            return convertToResponse(savedVisitor);
+        }
+        // 如果用户不存在，则创建新用户
+        if (!StringUtils.hasText(request.getAvatar())) {
+            request.setAvatar(AvatarConsts.getAvatar(request.getChannel()));
+        }
+        // uid使用自动生成的uid，防止前端uid冲突
+        request.setUid(uidUtils.getUid());
+        // 如果前端没有传递visitorUid，则使用uid作为visitorUid
+        if (!StringUtils.hasText(visitorUid)) {
+            request.setVisitorUid(request.getUid());
+        } else {
+            request.setVisitorUid(visitorUid);
+        }
+        // log.info("request {}", request);
+        VisitorEntity visitor = modelMapper.map(request, VisitorEntity.class);
+        VisitorDevice device = modelMapper.map(request, VisitorDevice.class);
+        visitor.setDeviceInfo(device);
+        VisitorEntity savedVisitor;
+        try {
+            savedVisitor = executeInNewTransaction(() -> visitorRepository.saveAndFlush(visitor));
+        } catch (DataIntegrityViolationException e) {
+            // 并发场景：两个请求同时 create，同一个 visitorUid+orgUid，后写会触发唯一键冲突。
+            // 在独立事务里回查已有记录，避免复用失败事务中的持久化上下文。
+            Optional<VisitorEntity> existing = findByVisitorUidAndOrgUid(request.getVisitorUid(), orgUid);
+            if (existing.isPresent()) {
+                return convertToResponse(existing.get());
+            }
+            throw e;
+        }
+        if (savedVisitor == null) {
+            throw new RuntimeException("visitor not saved");
+        }
+        //
+        return convertToResponse(savedVisitor);
+    }
+
+    private void applyRequestToVisitor(VisitorEntity visitor, VisitorRequest request) {
+        if (StringUtils.hasText(request.getNickname())) {
+            visitor.setNickname(request.getNickname());
+        }
+        if (StringUtils.hasText(request.getAvatar())) {
+            visitor.setAvatar(request.getAvatar());
+        }
+        if (StringUtils.hasText(request.getMobile())) {
+            visitor.setMobile(request.getMobile());
+        }
+        if (StringUtils.hasText(request.getEmail())) {
+            visitor.setEmail(request.getEmail());
+        }
+        if (StringUtils.hasText(request.getNote())) {
+            visitor.setNote(request.getNote());
+        }
+
+        if (request.getCustomFieldList() != null) {
+            visitor.setCustomFieldList(request.getCustomFieldList());
+        }
+        if (visitor.getIp() == null || !visitor.getIp().equals(request.getIp())) {
+            visitor.setIp(request.getIp());
+            visitor.setIpLocation(request.getIpLocation());
+        }
+        visitor.setVipLevel(request.getVipLevel());
+        if (StringUtils.hasText(request.getSipExtension())) {
+            visitor.setSipExtension(request.getSipExtension().trim());
+        }
+        if (StringUtils.hasText(request.getSipPassword())) {
+            visitor.setSipPassword(request.getSipPassword().trim());
+        }
+        if (visitor.getDeviceInfo() == null) {
+            visitor.setDeviceInfo(new VisitorDevice());
+        }
+        visitor.getDeviceInfo().setBrowser(request.getBrowser());
+        visitor.getDeviceInfo().setOs(request.getOs());
+        visitor.getDeviceInfo().setDevice(request.getDevice());
+        // 仅当请求携带非空 extra 时才覆盖，防止内部链路（如关键词转人工）用空值或设置快照冲掉访客资料 extra
+        if (StringUtils.hasText(request.getExtra()) && !BytedeskConsts.EMPTY_JSON_STRING.equals(request.getExtra().trim())) {
+            visitor.setExtra(request.getExtra());
+        }
+    }
+
+    private VisitorEntity retrySaveExistingVisitor(String visitorUid, String orgUid, VisitorRequest request,
+            ObjectOptimisticLockingFailureException originalException) {
+        return executeInNewTransaction(() -> {
+            VisitorEntity latest = visitorRepository.findByVisitorUidAndOrgUidAndDeleted(visitorUid, orgUid, false)
+                    .orElseThrow(() -> originalException);
+            applyRequestToVisitor(latest, request);
+            return visitorRepository.saveAndFlush(latest);
+        });
+    }
+
+    private VisitorEntity executeInNewTransaction(Supplier<VisitorEntity> action) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return transactionTemplate.execute(status -> action.get());
+    }
+
+    @Transactional
+    @Override
+    public VisitorResponse update(VisitorRequest request) {
+        Optional<VisitorEntity> visitorOptional = findByUid(request.getUid());
+        if (visitorOptional.isEmpty()) {
+            throw new NotFoundException("visitor not found");
+        }
+        // 
+        VisitorEntity visitor = visitorOptional.get();
+        visitor.setNickname(request.getNickname());
+        visitor.setAvatar(request.getAvatar());
+        visitor.setMobile(request.getMobile());
+        visitor.setEmail(request.getEmail());
+        visitor.setNote(request.getNote());
+		visitor.setCustomFieldList(request.getCustomFieldList());
+        visitor.setSipExtension(request.getSipExtension());
+        visitor.setSipPassword(request.getSipPassword());
+        // visitor.setTagList(request.getTagList()); // 标签列表不在这里更新，使用 updateTagList 方法更新
+        // 
+        VisitorEntity savedVisitor = save(visitor);
+        if (savedVisitor == null) {
+            throw new RuntimeException("visitor not saved");
+        }
+        // 
+        return convertToResponse(savedVisitor);
+    }
+
+    @Transactional
+    public VisitorResponse updateTagList(VisitorRequest request) {
+        // 
+        Optional<VisitorEntity> visitorOptional = findByUid(request.getUid());
+        if (!visitorOptional.isPresent()) {
+            throw new RuntimeException("visitor not found");
+        }
+        VisitorEntity visitor = visitorOptional.get();
+        visitor.setTagList(request.getTagList());
+        // 
+        VisitorEntity savedVisitor = save(visitor);
+        if (savedVisitor == null) {
+            throw new RuntimeException("visitor not saved");
+        }
+        return convertToResponse(savedVisitor);
+    }
+
+    public MessageProtobuf requestThread(VisitorRequest request) {
+        return threadRoutingContext.createCsThread(request);
+    }
+
+    @Cacheable(value = "visitor", key = "#uid", unless = "#result == null")
+    @Override
+    public Optional<VisitorEntity> findByUid(String uid) {
+        // 如果参数为空，则返回空
+        if (!StringUtils.hasText(uid)) {
+            return Optional.empty();
+        }
+        return visitorRepository.findByUidAndDeleted(uid, false);
+    }
+    
+    @Transactional(readOnly = true)
+    @Cacheable(value = "visitor", key = "#visitorUid + '-' + #orgUid", unless = "#result == null")
+    public Optional<VisitorEntity> findByVisitorUidAndOrgUid(String visitorUid, String orgUid) {
+        // 如果参数为空，则返回空
+        if (!StringUtils.hasText(visitorUid) || !StringUtils.hasText(orgUid)) {
+            return Optional.empty();
+        }
+        return visitorRepository.findByVisitorUidAndOrgUidAndDeleted(visitorUid, orgUid, false);
+    }
+
+    @Transactional(readOnly = true)
+    public VisitorResponse queryByVisitorUid(VisitorRequest request) {
+        String orgUid = request.getOrgUid();
+        String visitorUid = request.getVisitorUid();
+        if (!StringUtils.hasText(orgUid) || !StringUtils.hasText(visitorUid)) {
+            throw new IllegalArgumentException("orgUid and visitorUid are required");
+        }
+
+        VisitorEntity entity = findByVisitorUidAndOrgUid(visitorUid, orgUid)
+                .orElseThrow(() -> new NotFoundException("visitor not found"));
+        return convertToResponse(entity);
+    }
+
+    public List<VisitorEntity> findByStatus(String status) {
+        return visitorRepository.findByStatusAndDeleted(status, false);
+    }
+
+    // 注意：不能加 @Transactional。读-改-写放在同一事务时，UPDATE 会延迟到外层事务提交才执行，
+    // 乐观锁冲突在提交期抛出，BaseRestService.save 的重试循环捕获不到，导致请求直接报
+    // "Optimistic locking failure"（如访客心跳与定时离线任务并发更新同一访客）。
+    // 这里改为每次尝试读取最新数据，并在独立短事务内 saveAndFlush 立即暴露冲突后重试。
+    public int updateStatus(String uid, String newStatus) {
+        if (!StringUtils.hasText(uid) || !StringUtils.hasText(newStatus)) {
+            log.warn("skip visitor status update because uid or status is blank, uid: {}, status: {}", uid, newStatus);
+            return 0;
+        }
+
+        for (int attempt = 1; attempt <= STATUS_UPDATE_MAX_ATTEMPTS; attempt++) {
+            Optional<VisitorEntity> visitorOptional = visitorRepository.findByUidAndDeleted(uid, false);
+            if (visitorOptional.isEmpty()) {
+                log.warn("skip visitor status update because visitor not found, uid: {}", uid);
+                return 0;
+            }
+
+            VisitorEntity visitor = visitorOptional.get();
+
+            // epoch-millis heartbeat 节流，跨数据库、零时区歧义
+            if (VisitorStatusEnum.ONLINE.name().equals(newStatus)) {
+                long nowMs = System.currentTimeMillis();
+                Long lastHbMs = visitor.getHeartbeatAtMillis();
+                if (VisitorStatusEnum.ONLINE.name().equals(visitor.getStatus())
+                        && lastHbMs != null
+                        && (nowMs - lastHbMs) < ONLINE_HEARTBEAT_UPDATE_INTERVAL.toMillis()) {
+                    return 0;
+                }
+                visitor.setHeartbeatAtMillis(nowMs);
+            }
+
+            visitor.setStatus(newStatus);
+            try {
+                // 独立短事务内 saveAndFlush，乐观锁冲突在此立即抛出，便于用最新数据重试
+                VisitorEntity savedVisitor = executeInNewTransaction(() -> visitorRepository.saveAndFlush(visitor));
+                return savedVisitor != null ? 1 : 0;
+            } catch (ObjectOptimisticLockingFailureException e) {
+                if (attempt == STATUS_UPDATE_MAX_ATTEMPTS) {
+                    // 多次冲突则放弃本次更新，状态由下一次心跳/定时任务自然纠正
+                    log.warn("visitor status update conflict after {} attempts, uid: {}, status: {}",
+                            attempt, uid, newStatus);
+                    return 0;
+                }
+                log.debug("visitor status optimistic lock conflict, retrying, uid: {}, attempt: {}", uid, attempt);
+            }
+        }
+        return 0;
+    }
+
+    @Caching(put = {
+            @CachePut(value = "visitor", key = "#entity.uid", unless = "#entity == null"),
+            @CachePut(value = "visitor", key = "#entity.visitorUid + '-' + #entity.orgUid", unless = "#entity == null")
+    })
+    @Override
+    protected VisitorEntity doSave(VisitorEntity entity) {
+        return visitorRepository.save(entity);
+    }
+
+    @CacheEvict(value = "visitor", key = "#uid")
+    @Override
+    public void deleteByUid(String uid) {
+        Optional<VisitorEntity> visitorOptional = findByUid(uid);
+        if (visitorOptional.isPresent()) {
+            VisitorEntity visitor = visitorOptional.get();
+            visitor.setDeleted(true);
+            save(visitor);
+        }
+    }
+
+    @Override
+    public void delete(VisitorRequest entity) {
+        deleteByUid(entity.getUid());
+    }
+
+    public VisitorResponse restore(VisitorRequest request) {
+        VisitorEntity visitor = visitorRepository.findByUidAndDeleted(request.getUid(), true)
+                .orElseThrow(() -> new NotFoundException("visitor not found"));
+        visitor.setDeleted(false);
+        return convertToResponse(save(visitor));
+    }
+
+    @Override
+    public VisitorEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            VisitorEntity entity) {
+        try {
+            Optional<VisitorEntity> latest = findByUid(entity.getUid());
+            if (latest.isPresent()) {
+                VisitorEntity latestEntity = latest.get();
+                // 合并访客信息
+                latestEntity.setNickname(entity.getNickname());
+                latestEntity.setAvatar(entity.getAvatar());
+                latestEntity.setMobile(entity.getMobile());
+                latestEntity.setEmail(entity.getEmail());
+                latestEntity.setIp(entity.getIp());
+                latestEntity.setIpLocation(entity.getIpLocation());
+                latestEntity.setVipLevel(entity.getVipLevel());
+                latestEntity.setTagList(entity.getTagList());
+                latestEntity.setNote(entity.getNote());
+                latestEntity.setExtra(entity.getExtra());
+                latestEntity.setDeviceInfo(entity.getDeviceInfo());
+				latestEntity.setCustomFieldList(entity.getCustomFieldList());
+                latestEntity.setSipExtension(entity.getSipExtension());
+                latestEntity.setSipPassword(entity.getSipPassword());
+                return visitorRepository.save(latestEntity);
+            }
+        } catch (Exception ex) {
+            log.error("无法处理乐观锁冲突", ex);
+            throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+        }
+        return null;
+    }
+
+    @Override
+    public VisitorResponse convertToResponse(VisitorEntity entity) {
+        return ServiceConvertUtils.convertToVisitorResponse(entity);
+    }
+
+    @Override
+    public VisitorExcel convertToExcel(VisitorEntity entity) {
+        VisitorExcel excel = modelMapper.map(entity, VisitorExcel.class);
+        excel.setChannel(ChannelEnum.toChineseDisplay(entity.getChannel()));
+        return excel;
+    }
+
+    public void publishVisitorMessageEvent(String messageJson) {
+        if (!StringUtils.hasText(messageJson)) {
+            return;
+        }
+        try {
+            applicationEventPublisher.publishEvent(new VisitorRobotMessageEvent(this, messageJson));
+        } catch (Exception ex) {
+            log.warn("Failed to publish VisitorRobotMessageEvent for visitor SSE payload", ex);
+        }
+    }
+    
+
+}

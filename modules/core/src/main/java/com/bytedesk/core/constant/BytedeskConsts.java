@@ -1,0 +1,106 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-02-02 21:48:19
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-08 21:10:44
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.constant;
+
+/**
+ *
+ * @author bytedesk.com
+ */
+public class BytedeskConsts {
+
+    // Prevents instantiation
+    private BytedeskConsts() {
+    }
+    
+    // bytedesk
+    public static final String PLATFORM_BYTEDESK = "BYTEDESK";
+    public static final String TRACE_ID = "traceId";
+    public static final String TRACE_ID_HTTP_HEADER = "X-Trace-Id";
+    // HTTP correlation id
+    public static final String REQUEST_ID = "X-Request-Id";
+    public static final String REQUEST_ID_MDC = "requestId";
+    public static final String LICENSE_VALID_CACHE_PREFIX = "bytedesk:license:valid:";
+    // 空字符串
+    public static final String EMPTY_STRING = "";
+    public static final String EMPTY_JSON_STRING = "{}";
+    public static final String EMPTY_ARRAY_STRING = "[]";    
+    public static final String DEFAULT_COLOR = "blue";
+    // 默认组织uid
+    public static final String DEFAULT_SUPER_UID = "df_super_uid";
+    public static final String DEFAULT_ORGANIZATION_UID = "df_org_uid";
+    public static final String DEFAULT_UNIFIED_UID = "df_un_uid";
+    public static final String DEFAULT_AGENT_UID = "df_ag_uid";
+    public static final String DEFAULT_WORKGROUP_UID = "df_wg_uid"; // 默认工作组uid
+    public static final String DEFAULT_WORKGROUP_UID_BOOKING = "df_wg_booking"; // booking 场景工作组uid
+    public static final String DEFAULT_WORKGROUP_UID_PRESALES = "df_wg_presales"; // 售前
+    public static final String DEFAULT_WORKGROUP_UID_AFTERSALES = "df_wg_aftersales"; // 售后
+    public static final String DEFAULT_WORKGROUP_UID_TICKET = "df_wg_ticket"; // 工单
+    public static final String DEFAULT_DEPARTMENT_UID = "df_dp_uid";
+    public static final String DEFAULT_MEMBER_UID = "df_mb_uid"; // 默认团队成员uid
+    public static final String DEFAULT_ROBOT_UID = "df_rt_uid"; // 默认机器人uid
+    public static final String DEFAULT_IVR_WORKFLOW_UID = "df_ivr_wf_uid"; // 默认 IVR 工作流 uid
+    public static final String DEFAULT_IVR_SATISFACTION_WORKFLOW_UID = "df_ivr_satisfaction_wf_uid"; // 默认满意度 IVR 工作流 uid
+    public static final String DEFAULT_IVR_PASSWORD_VERIFICATION_WORKFLOW_UID = "df_ivr_password_verification_wf_uid"; // 默认密码验证 IVR 工作流 uid
+    public static final String DEFAULT_IVR_BOT_WORKFLOW_UID = "df_ivr_bot_wf_uid"; // 默认机器人对话 IVR 工作流 uid
+    public static final String DEFAULT_IVR_MENU_UID = "df_ivr_menu_uid"; // 默认 IVR 菜单 uid
+    public static final String DEFAULT_IVR_SATISFACTION_MENU_UID = "df_ivr_satisfaction_menu_uid"; // 默认满意度 IVR 菜单 uid
+    public static final String DEFAULT_IVR_PASSWORD_VERIFICATION_MENU_UID = "df_ivr_password_verification_menu_uid"; // 默认密码验证 IVR 菜单 uid
+    public static final String DEFAULT_IVR_BOT_MENU_UID = "df_ivr_bot_menu_uid"; // 默认机器人对话 IVR 菜单 uid
+    public static final String DEFAULT_IVR_EXTENSION_NUMBER = "5002"; // 默认 IVR 测试号码
+    public static final String DEFAULT_IVR_SATISFACTION_EXTENSION_NUMBER = "5004"; // 默认满意度 IVR 测试号码
+    public static final String DEFAULT_IVR_PASSWORD_VERIFICATION_EXTENSION_NUMBER = "5005"; // 默认密码验证 IVR 测试号码
+    public static final String DEFAULT_IVR_BOT_EXTENSION_NUMBER = "5006"; // 默认机器人对话 IVR 测试号码
+    public static final String DEFAULT_FILE_ASSISTANT_UID = "df_fa_uid"; // 默认文件助手uid
+    public static final String DEFAULT_QUEUE_ASSISTANT_UID = "df_qa_uid"; // 默认排队助手uid
+    public static final String DEFAULT_CLIPBOARD_ASSISTANT_UID = "df_ca_uid"; // 默认剪贴板助手uid
+    public static final String DEFAULT_INTENT_CLASSIFICATION_ASSISTANT_UID = "df_ica_uid"; // 默认意图分类助手uid
+    public static final String DEFAULT_INTENT_REWRITE_ASSISTANT_UID = "df_ira_uid"; // 默认意图改写助手uid
+    public static final String DEFAULT_EMOTION_ASSISTANT_UID = "df_ea_uid"; // 默认情绪助手uid
+    public static final String DEFAULT_AIRLINE_BOOKING_ASSISTANT_UID = "df_aba_uid"; // 默认航班预订助手uid
+    public static final String DEFAULT_CHANNEL_UID = "df_ch_uid"; // 默认渠道uid
+    public static final String DEFAULT_AGENT_ASSISTANT_UID = "df_as_uid"; // 默认客服助手uid
+    public static final String DEFAULT_SYSTEM_UID = "df_sys_uid"; // 默认系统用户uid
+    public static final String DEFAULT_KB_QUICK_REPLY_UID = "df_kb_qr_uid"; // 默认知识库快捷回复uid
+    // public static final String DEFAULT_KB_QUICK_BUTTON_UID = "df_kb_qb_uid";
+    public static final String DEFAULT_KB_HELPCENTER_UID = "df_kb_hc_uid";
+    public static final String DEFAULT_KB_NOTEBASE_UID = "df_kb_nb_uid";
+    public static final String DEFAULT_KB_TABOO_UID = "df_kb_tb_uid";
+    public static final String DEFAULT_KB_LLM_UID = "df_kb_llm_uid";
+    public static final String DEFAULT_KB_BLOG_UID = "df_kb_bg_uid";
+    // public static final String DEFAULT_KB_KEYWORD_UID = "df_kb_kw_uid";
+    // public static final String DEFAULT_KB_FAQ_UID = "df_kb_faq_uid";
+    public static final String DEFAULT_KB_AUTOREPLY_UID = "df_kb_ar_uid";
+    // public static final String DEFAULT_KB_AUTOREPLY_FIXED_UID = "df_kb_ar_fixed_uid";
+    // public static final String DEFAULT_KB_AUTOREPLY_KEYWORD_UID = "df_kb_ar_keyword_uid";
+
+    public static final String DEFAULT_ROLE_SUPER_UID = "df_role_super_uid";
+    public static final String DEFAULT_ROLE_ADMIN_UID = "df_role_admin_uid";
+    public static final String DEFAULT_ROLE_DEPT_ADMIN_UID = "df_role_dept_admin_uid"; // 部门管理员
+    public static final String DEFAULT_ROLE_WORKGROUP_ADMIN_UID = "df_role_wg_admin_uid"; // 工作组管理员
+    public static final String DEFAULT_ROLE_AGENT_UID = "df_role_agent_uid";
+    public static final String DEFAULT_ROLE_USER_UID = "df_role_user_uid";
+
+    // Legacy / deprecated role uid kept for backward compatibility.
+    // Older members may still carry this role uid in persisted roleUids.
+    public static final String DEPRECATED_ROLE_MEMBER_UID = "df_role_member_uid";
+    // 
+    public static final int COLUMN_EXTRA_LENGTH = 2048;
+    // 
+    public static final String DEFAULT_SORT_BY = "updatedAt";
+    public static final String SORT_DIRECTION_ASC = "ascend";
+    public static final String SORT_DIRECTION_DESC = "descend";
+    public static final String DEFAULT_SORT_DIRECTION = SORT_DIRECTION_DESC; // 默认降序
+
+
+}

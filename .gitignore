@@ -1,0 +1,34 @@
+# 构建产物
+target/
+*.jar
+*.war
+*.class
+
+# 运行数据与日志
+data/
+logs/
+*.log
+hs_err_pid*
+*.pid
+
+# 本地配置与密钥
+.env
+.env.local
+.deepseek-key
+*.p12
+*.jks
+
+# 编辑器与系统
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 前端依赖
+node_modules/
+npm-debug.log*
+
+# 定制层运行期
+deploy-selfdesk/runtime/
+deploy-selfdesk/**/__pycache__/

@@ -1,0 +1,1219 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:20:17
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-08-24 11:16:13
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.member;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+
+import org.hibernate.Hibernate;
+import org.modelmapper.ModelMapper;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import com.alibaba.fastjson2.JSON;
+import com.bytedesk.core.base.BaseRestServiceWithExport;
+import com.bytedesk.core.constant.AvatarConsts;
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.exception.CommonI18nExceptions;
+import com.bytedesk.core.enums.ChannelEnum;
+import com.bytedesk.core.enums.PlatformEnum;
+import com.bytedesk.core.exception.EmailExistsException;
+import com.bytedesk.core.exception.MobileExistsException;
+import com.bytedesk.core.exception.OrganizationI18nExceptions;
+import com.bytedesk.core.exception.OrgMaxMembersExceededException;
+import com.bytedesk.core.exception.ResourceI18nExceptions;
+import com.bytedesk.core.member.event.MemberDeletedEvent;
+import com.bytedesk.core.message.MessageService;
+import com.bytedesk.core.rbac.auth.AuthService;
+import com.bytedesk.core.rbac.organization.OrganizationEntity;
+import com.bytedesk.core.rbac.organization.OrganizationRestService;
+import com.bytedesk.core.rbac.token.TokenRestService;
+import com.bytedesk.core.rbac.role.RoleResponseSimple;
+import com.bytedesk.core.rbac.role.RoleRestService;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserProtobuf;
+import com.bytedesk.core.rbac.user.UserRequest;
+import com.bytedesk.core.rbac.user.UserResponseSimple;
+import com.bytedesk.core.rbac.user.UserService;
+import com.bytedesk.core.rbac.user.UserEntity.RegisterSource;
+import com.bytedesk.core.topic.TopicUtils;
+import com.bytedesk.core.uid.UidUtils;
+import com.bytedesk.core.utils.CountryCodeUtils;
+import com.bytedesk.core.department.DepartmentConsts;
+import com.bytedesk.core.department.DepartmentEntity;
+import com.bytedesk.core.department.DepartmentRequest;
+import com.bytedesk.core.department.DepartmentResponse;
+import com.bytedesk.core.department.DepartmentRestService;
+import com.bytedesk.core.thread.ThreadEntity;
+import com.bytedesk.core.thread.ThreadRestService;
+import com.bytedesk.core.thread.enums.ThreadProcessStatusEnum;
+
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+@AllArgsConstructor
+public class MemberRestService extends BaseRestServiceWithExport<MemberEntity, MemberRequest, MemberResponse, MemberExcelExport> {
+
+    private final UserService userService;
+
+    private final MemberRepository memberRepository;
+
+    private final ModelMapper modelMapper;
+
+    private final UidUtils uidUtils;
+
+    private final AuthService authService;
+
+    private final TokenRestService tokenRestService;
+
+    private final RoleRestService roleRestService;
+
+    private final ThreadRestService threadRestService;
+
+    private final DepartmentRestService departmentRestService;
+
+    private final OrganizationRestService organizationRestService;
+
+    private final MessageService messageService;
+
+    private final ApplicationEventPublisher applicationEventPublisher;
+
+    private OrganizationEntity requireOrganization(String orgUid) {
+        if (!StringUtils.hasText(orgUid)) {
+            throw new IllegalArgumentException("orgUid is required");
+        }
+        return organizationRestService.findByUid(orgUid)
+            .orElseThrow(() -> OrganizationI18nExceptions.organizationNotFound(orgUid));
+    }
+
+    private int resolveMaxMembers(OrganizationEntity organization) {
+        return organization.getMaxMembers() != null ? organization.getMaxMembers() : 20;
+    }
+
+    private void assertMemberCapacityAvailable(String orgUid) {
+        if (BytedeskConsts.DEFAULT_ORGANIZATION_UID.equals(orgUid)) {
+            return;
+        }
+        OrganizationEntity organization = requireOrganization(orgUid);
+        int maxMembers = resolveMaxMembers(organization);
+        long current = memberRepository.countByOrgUidAndDeletedFalse(orgUid);
+        if (current >= maxMembers) {
+            String orgName = StringUtils.hasText(organization.getName()) ? organization.getName() : orgUid;
+            String message = String.format(
+                    "组织【%s】成员数已达上限，当前已使用 %d/%d，无法继续新增成员。请先停用或删除未使用成员，或到组织设置中提高“成员最大数”后重试。",
+                    orgName,
+                    current,
+                    maxMembers);
+            throw new OrgMaxMembersExceededException(orgUid, orgName, maxMembers, current, message);
+        }
+    }
+
+    public MemberResponse query(MemberRequest request) {
+        UserEntity user = authService.getUser();
+        if (user == null) {
+            throw CommonI18nExceptions.loginRequired();
+        }
+        if (!StringUtils.hasText(request.getOrgUid())) {
+            throw new IllegalArgumentException("orgUid is required");
+        }
+        Optional<MemberEntity> memberOptional = findByUserAndOrgUid(user, request.getOrgUid());
+        if (memberOptional.isPresent()) {
+            return convertToResponse(memberOptional.get());
+        } else {
+            throw ResourceI18nExceptions.memberNotFound();
+        }
+    }
+
+    public MemberResponse queryByUserUid(MemberRequest request) {
+        if (!StringUtils.hasText(request.getUserUid())) {
+            throw new IllegalArgumentException("userUid is required");
+        }
+        String orgUid = resolveOrgUid(request.getOrgUid());
+        Optional<MemberEntity> memberOptional = findByUserUidAndOrgUid(request.getUserUid(), orgUid);
+        if (memberOptional.isPresent()) {
+            return convertToResponse(memberOptional.get());
+        } else {
+            throw ResourceI18nExceptions.memberNotFound();
+        }
+    }
+
+    public Boolean existsByUid(String uid) {
+        return memberRepository.existsByUid(uid);
+    }
+
+    @Transactional
+    public MemberResponse create(MemberRequest request) {
+        // 判断uid是否已存在
+        if (StringUtils.hasText(request.getUid()) && existsByUid(request.getUid())) {
+            return convertToResponse(findByUid(request.getUid()).get());
+        }
+
+        // 注意：不在此处验证超级管理员邮箱/手机号
+        // 原因：成员（Member）是组织维度的，用户（User）是平台维度的
+        // 成员应该可以使用关联用户的邮箱/手机号（例如为超管创建默认管理员成员）
+        // 组织级别的重复检查已在下方进行，平台级别的用户验证在 createUserFromMember 中进行
+
+        if (StringUtils.hasText(request.getEmail())
+                && existsByEmailAndOrgUid(request.getEmail(), request.getOrgUid())) {
+            throw new EmailExistsException(
+                    I18Consts.withArgs(I18Consts.I18N_EMAIL_ALREADY_EXISTS, request.getEmail()));
+        }
+        String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+        request.setCountry(normalizedCountry);
+        if (StringUtils.hasText(request.getMobile())
+            && existsByMobileAndOrgUid(request.getMobile(), normalizedCountry, request.getOrgUid())) {
+            throw new MobileExistsException(
+                    I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, request.getMobile()));
+        }
+        assertMemberCapacityAvailable(request.getOrgUid());
+        //
+        MemberEntity member = modelMapper.map(request, MemberEntity.class);
+        if (StringUtils.hasText(request.getUid())) {
+            member.setUid(request.getUid());
+        } else {
+            member.setUid(uidUtils.getUid());
+        }
+        member.setDeptUid(request.getDeptUid());
+        member.setOrgUid(request.getOrgUid());
+        member.setAvatar(resolveMemberAvatar(request.getAvatar(), null));
+        member.setDescription(resolveMemberDescription(request.getDescription(), null));
+        // 
+        Set<String> normalizedRoleUids = normalizeRoleUids(request.getRoleUids());
+        request.setRoleUids(normalizedRoleUids);
+        member.setAllowedLoginPlatforms(resolveAllowedLoginPlatforms(
+            request.getAllowedLoginPlatforms(),
+            normalizedRoleUids,
+            null));
+        // 尝试根据邮箱和平台查找用户
+        UserRequest userRequest = modelMapper.map(request, UserRequest.class);
+        userRequest.setAvatar(AvatarConsts.getDefaultUserAvatarUrl());
+        userRequest.setPlatform(PlatformEnum.BYTEDESK.name());
+        userRequest.setOrgUid(request.getOrgUid());
+        // 检查用户是否存在，不存在则创建
+        UserEntity user = null;
+        if (StringUtils.hasText(request.getMobile())) {
+            user = userService.findByMobileAndPlatform(request.getMobile(),
+                    normalizedCountry,
+                    PlatformEnum.BYTEDESK.name())
+                    .orElseGet(() -> userService.createUserFromMember(userRequest));
+        } else if (StringUtils.hasText(request.getEmail())) {
+            user = userService.findByEmailAndPlatform(request.getEmail(),
+                    PlatformEnum.BYTEDESK.name())
+                    .orElseGet(() -> userService.createUserFromMember(userRequest));
+        } else {
+            throw new RuntimeException("mobile and email should not be both null.");
+        }
+
+        if (!StringUtils.hasText(member.getCountry()) && StringUtils.hasText(user.getCountry())) {
+            member.setCountry(user.getCountry());
+        }
+        // R3 修复：组织管理员本人通过成员入口补建成员时，改走管理员专用补齐逻辑，
+        // 避免普通成员角色更新链路触发受限角色校验
+        // （UserService.updateUserRoles 的 RESTRICTED_ROLE_UIDS diff 校验）
+        if (isOrganizationAdminUser(user, request.getOrgUid())) {
+            OrganizationEntity adminOrg = organizationRestService.findByUid(request.getOrgUid())
+                    .orElseThrow(() -> OrganizationI18nExceptions.organizationNotFound(request.getOrgUid()));
+            MemberEntity adminMember = ensureMemberForOrganizationAdmin(user, adminOrg, request.getUid());
+            return convertToResponse(adminMember);
+        }
+        user = userService.updateUserFromMember(user, request);
+        // 设置用户到成员对象中
+        member.setUser(user);
+        //
+        MemberEntity saveMember = save(member);
+        if (saveMember == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+        // 
+        return convertToResponse(saveMember);
+    }
+
+    /**
+     * 判断用户是否为指定组织的管理员（organization.user 指向该用户）。
+     */
+    private boolean isOrganizationAdminUser(UserEntity user, String orgUid) {
+        if (user == null || !StringUtils.hasText(user.getUid()) || !StringUtils.hasText(orgUid)) {
+            return false;
+        }
+        return organizationRestService.findByUid(orgUid)
+                .map(org -> org.getUser() != null && user.getUid().equals(org.getUser().getUid()))
+                .orElse(false);
+    }
+
+    /**
+     * 为组织管理员补齐成员记录（仅供管理员转移/管理员成员补齐使用，不接受任意 roleUids 输入）。
+     *
+     * 语义对齐 MemberEventListener.onOrganizationCreateEvent 中为新管理员补成员的既有逻辑：
+     * - 已存在成员记录（含历史软删）：恢复/复用，并刷新管理员默认可登录平台
+     * - 不存在：放入 DEPT_ADMIN 部门（不存在时创建），昵称/头像/邮箱/手机号从 user 复制，
+     *   角色 ROLE_ADMIN，allowedLoginPlatforms = defaultForRoleUids(ROLE_ADMIN)
+     * - 不修改通用受限角色校验（UserService.updateUserRoles 的 RESTRICTED_ROLE_UIDS 规则保持不变），
+     *   安全边界：管理员身份只能由管理员转移接口或超级管理员路径设置
+     */
+    @Transactional
+    public MemberEntity ensureMemberForOrganizationAdmin(UserEntity user, OrganizationEntity organization) {
+        return ensureMemberForOrganizationAdmin(user, organization, null);
+    }
+
+    @Transactional
+    public MemberEntity ensureMemberForOrganizationAdmin(UserEntity user, OrganizationEntity organization,
+            String preferredUid) {
+        if (user == null || organization == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+        final String orgUid = organization.getUid();
+        final Set<String> roleUids = new HashSet<>(Arrays.asList(BytedeskConsts.DEFAULT_ROLE_ADMIN_UID));
+
+        // 1. 复用已存在的成员记录（含历史软删，恢复并幂等，不重复插入）
+        Optional<MemberEntity> existingOptional = memberRepository.findByUser_UidAndOrgUid(user.getUid(), orgUid);
+        if (existingOptional.isPresent()) {
+            MemberEntity existing = existingOptional.get();
+            existing.setDeleted(false);
+            existing.setOrgUid(orgUid);
+            existing.setAllowedLoginPlatforms(MemberLoginPlatformEnum.defaultForRoleUids(roleUids));
+            MemberEntity saved = save(existing);
+            if (saved == null) {
+                throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+            }
+            return saved;
+        }
+
+        // 2. 组织容量校验（与普通成员创建一致）
+        assertMemberCapacityAvailable(orgUid);
+
+        // 3. 管理员部门（不存在时创建，对齐组织创建自动初始化链）
+        DepartmentResponse departmentResponse = departmentRestService
+                .findByNameAndOrgUid(DepartmentConsts.DEPT_ADMIN, orgUid)
+                .map(departmentRestService::convertToResponse)
+                .orElseGet(() -> {
+                    DepartmentRequest departmentRequest = DepartmentRequest.builder()
+                            .uid(uidUtils.getUid())
+                            .name(DepartmentConsts.DEPT_ADMIN)
+                            .description("Description for" + DepartmentConsts.DEPT_ADMIN)
+                            .orgUid(orgUid)
+                            .build();
+                    return departmentRestService.create(departmentRequest);
+                });
+        if (departmentResponse == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+
+        // 4. 创建管理员成员（角色固定 ROLE_ADMIN，不可由调用方指定）
+        MemberRequest memberRequest = modelMapper.map(user, MemberRequest.class);
+        memberRequest.setUid(StringUtils.hasText(preferredUid) && !existsByUid(preferredUid)
+                ? preferredUid
+                : uidUtils.getUid());
+        memberRequest.setJobNo("001");
+        memberRequest.setJobTitle(I18Consts.I18N_ADMIN);
+        memberRequest.setSeatNo("001");
+        memberRequest.setTelephone("001");
+        memberRequest.setMobile(user.getMobile());
+        memberRequest.setCountry(user.getCountry());
+        memberRequest.setStatus(MemberStatusEnum.ACTIVE.name());
+        memberRequest.setRoleUids(roleUids);
+        memberRequest.setDeptUid(departmentResponse.getUid());
+        memberRequest.setOrgUid(orgUid);
+        // 确保本组织存在 ROLE_ADMIN 关联：使用幂等 addRoleAdmin（已存在则无操作），
+        // 不走 updateUserRoles 的整体替换语义，避免误删本组织其它角色（如 ROLE_AGENT）；
+        // 若用户当前登录上下文在其它组织，补齐后恢复原 currentOrganization
+        String originalOrgUid = user.getCurrentOrganization() != null
+                && StringUtils.hasText(user.getCurrentOrganization().getUid())
+                        ? user.getCurrentOrganization().getUid()
+                        : null;
+        user.setCurrentOrganization(organization);
+        user = userService.addRoleAdmin(user);
+        if (originalOrgUid != null && !originalOrgUid.equals(orgUid)) {
+            user = userService.ensureCurrentOrganization(user, originalOrgUid);
+            user = userService.save(user);
+        }
+
+        MemberEntity member = modelMapper.map(memberRequest, MemberEntity.class);
+        member.setUid(memberRequest.getUid());
+        member.setOrgUid(orgUid);
+        member.setDeptUid(departmentResponse.getUid());
+        member.setAvatar(resolveMemberAvatar(null, null));
+        member.setDescription(resolveMemberDescription(null, null));
+        member.setAllowedLoginPlatforms(MemberLoginPlatformEnum.defaultForRoleUids(roleUids));
+        member.setUser(user);
+        MemberEntity savedMember = save(member);
+        if (savedMember == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+        return savedMember;
+    }
+
+    @Transactional
+    public MemberResponse update(MemberRequest request) {
+        //
+        Optional<MemberEntity> memberOptional = findByUid(request.getUid());
+        if (!memberOptional.isPresent()) {
+            throw new RuntimeException("Failed to find member.");
+        }
+        //
+        MemberEntity member = memberOptional.get();
+        // 权限收敛：编辑其他成员仅限组织管理员/超级管理员；普通成员仅能编辑自己的成员资料
+        enforceUpdatePermission(member, request);
+        String normalizedCountry = CountryCodeUtils.normalize(request.getCountry());
+        request.setCountry(normalizedCountry);
+
+        // 保护超级管理员账号：禁止将非超管成员的邮箱/手机号改成超管的
+        String targetUserUid = member.getUser() != null ? member.getUser().getUid() : null;
+        userService.validateNotUsingSuperCredentials(request.getEmail(), request.getMobile(), targetUserUid);
+
+        if (StringUtils.hasText(request.getMobile())) {
+            boolean mobileChanged = !request.getMobile().equals(member.getMobile());
+            boolean countryChanged = !normalizedCountry.equals(CountryCodeUtils.normalize(member.getCountry()));
+            if ((mobileChanged || countryChanged)
+                    && existsByMobileAndOrgUid(request.getMobile(), normalizedCountry, member.getOrgUid())) {
+                throw new MobileExistsException(
+                        I18Consts.withArgs(I18Consts.I18N_MOBILE_ALREADY_EXISTS, request.getMobile()));
+            }
+        }
+
+        // modelMapper.map(memberRequest, member);
+        member.setDeptUid(request.getDeptUid());
+        member.setNickname(request.getNickname());
+        member.setAvatar(resolveMemberAvatar(request.getAvatar(), member.getAvatar()));
+        member.setDescription(resolveMemberDescription(request.getDescription(), member.getDescription()));
+        member.setEmail(request.getEmail());
+        member.setCountry(normalizedCountry);
+        member.setMobile(request.getMobile());
+        member.setJobTitle(request.getJobTitle());
+        member.setJobNo(request.getJobNo());
+        member.setSeatNo(request.getSeatNo());
+        member.setTelephone(request.getTelephone());
+
+        UserEntity user = member.getUser();
+        Set<String> normalizedRoleUids = request.getRoleUids() == null
+            ? normalizeRoleUids(user != null ? user.getRoleUids() : null)
+            : normalizeRoleUids(request.getRoleUids());
+        request.setRoleUids(normalizedRoleUids);
+        member.setAllowedLoginPlatforms(resolveAllowedLoginPlatforms(
+            request.getAllowedLoginPlatforms(),
+            normalizedRoleUids,
+            member.getAllowedLoginPlatforms()));
+
+        user = userService.updateUserFromMember(user, request);
+        // T2 反向同步：成员联系方式镜像回关联 User（含平台级唯一校验），
+        // 并复用正向同步覆盖该 User 在其他组织的有效 Member；仅传播非空值
+        user = userService.syncUserContactsFromMember(user, request.getMobile(), request.getEmail(),
+                request.getCountry());
+        member.setUser(user);
+        //
+        MemberEntity savedMember = save(member);
+        if (savedMember == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+ 
+        return convertToResponse(savedMember);
+    }
+
+    /**
+     * 成员编辑权限收敛（与前端 MemberTable 按钮隐藏双层防护）：
+     * - 组织管理员/超级管理员可编辑任意成员；
+     * - 普通成员仅能编辑自己对应的成员资料，且角色/可登录平台/部门保持不变（防提权）。
+     */
+    private void enforceUpdatePermission(MemberEntity member, MemberRequest request) {
+        if (authService.isOrgAdminOrSuperUser()) {
+            return;
+        }
+        UserEntity currentUser = authService.getUser();
+        String targetUserUid = member.getUser() != null ? member.getUser().getUid() : null;
+        boolean isSelf = currentUser != null && targetUserUid != null
+                && StringUtils.hasText(targetUserUid)
+                && targetUserUid.equals(currentUser.getUid());
+        if (!isSelf) {
+            log.warn("Member update denied: only org admin can edit other members, currentUser={}, targetMemberUid={}",
+                    currentUser != null ? currentUser.getUid() : null, member.getUid());
+            throw new RuntimeException(I18Consts.I18N_MEMBER_UPDATE_ADMIN_OR_SELF_ONLY);
+        }
+        // 普通成员自编辑：忽略角色/可登录平台/部门变更，保持现有值（防提权）
+        request.setRoleUids(null);
+        request.setAllowedLoginPlatforms(null);
+        request.setDeptUid(member.getDeptUid());
+    }
+
+    /**
+     * 禁用/启用成员仅组织管理员/超级管理员可操作，普通成员不可禁用/启用任何人（包括自己）。
+     */
+    private void enforceOrgAdminOnly(String action) {
+        if (authService.isOrgAdminOrSuperUser()) {
+            return;
+        }
+        UserEntity currentUser = authService.getUser();
+        log.warn("Member {} denied: only org admin can perform this action, currentUser={}",
+                action, currentUser != null ? currentUser.getUid() : null);
+        throw new RuntimeException(I18Consts.I18N_MEMBER_DISABLE_ADMIN_ONLY);
+    }
+
+    private Set<String> normalizeRoleUids(Set<String> roleUids) {
+        if (roleUids == null) {
+            return new HashSet<>(Arrays.asList(BytedeskConsts.DEFAULT_ROLE_USER_UID));
+        }
+
+        Set<String> normalized = roleUids.stream()
+                .filter(StringUtils::hasText)
+                .map(uid -> BytedeskConsts.DEPRECATED_ROLE_MEMBER_UID.equals(uid)
+                        ? BytedeskConsts.DEFAULT_ROLE_USER_UID
+                        : uid)
+                .collect(Collectors.toSet());
+
+        // All users must have ROLE_USER (df_role_user_uid)
+        if (!normalized.contains(BytedeskConsts.DEFAULT_ROLE_USER_UID)) {
+            normalized.add(BytedeskConsts.DEFAULT_ROLE_USER_UID);
+        }
+
+        return normalized;
+    }
+
+    private String resolveMemberAvatar(String requestedAvatar, String existingAvatar) {
+        if (StringUtils.hasText(requestedAvatar)) {
+            return requestedAvatar;
+        }
+        if (StringUtils.hasText(existingAvatar)) {
+            return existingAvatar;
+        }
+        return AvatarConsts.getDefaultUserAvatarUrl();
+    }
+
+    private String resolveMemberDescription(String requestedDescription, String existingDescription) {
+        if (StringUtils.hasText(requestedDescription)) {
+            return requestedDescription;
+        }
+        if (StringUtils.hasText(existingDescription)) {
+            return existingDescription;
+        }
+        return I18Consts.I18N_USER_DESCRIPTION;
+    }
+
+    private Set<String> resolveAllowedLoginPlatforms(Set<String> requestedPlatforms,
+            Set<String> normalizedRoleUids,
+            Set<String> existingPlatforms) {
+        Set<String> normalizedRequested = normalizeAllowedLoginPlatforms(requestedPlatforms);
+        if (!normalizedRequested.isEmpty()) {
+            return normalizedRequested;
+        }
+
+        Set<String> normalizedExisting = normalizeAllowedLoginPlatforms(existingPlatforms);
+        if (!normalizedExisting.isEmpty()) {
+            return normalizedExisting;
+        }
+
+        return MemberLoginPlatformEnum.defaultForRoleUids(normalizedRoleUids);
+    }
+
+    private Set<String> normalizeAllowedLoginPlatforms(Set<String> allowedLoginPlatforms) {
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        if (allowedLoginPlatforms == null) {
+            return normalized;
+        }
+
+        for (String platform : allowedLoginPlatforms) {
+            if (!StringUtils.hasText(platform)) {
+                continue;
+            }
+            String normalizedPlatform = platform.trim();
+            if (MemberLoginPlatformEnum.isSupported(normalizedPlatform)) {
+                normalized.add(normalizedPlatform);
+            }
+        }
+        return normalized;
+    }
+
+    // activate
+    @Transactional
+    public MemberResponse activate(MemberRequest request) {
+        Optional<MemberEntity> memberOptional = findByUid(request.getUid());
+        if (!memberOptional.isPresent()) {
+            throw new RuntimeException("Failed to find member.");
+        }
+        //
+        MemberEntity member = memberOptional.get();
+        member.setStatus(MemberStatusEnum.ACTIVE.name());
+        // 
+        MemberEntity savedEntity = save(member);
+        if (savedEntity == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+        return convertToResponse(savedEntity);
+    }
+
+    @Transactional
+    public MemberResponse forceLogout(MemberRequest request) {
+        if (request == null || !StringUtils.hasText(request.getUid())) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_UID_REQUIRED);
+        }
+        // 禁用成员仅组织管理员/超级管理员可操作
+        enforceOrgAdminOnly("forceLogout");
+
+        MemberEntity member = findByUid(request.getUid())
+            .orElseThrow(ResourceI18nExceptions::memberNotFound);
+        // 防止把超级管理员禁用后无法登录任何前端解禁，后端双层防护（前端已隐藏入口）
+        if (member.getUser() != null && Boolean.TRUE.equals(member.getUser().isSuperUser())) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SUPER_ADMIN_DISABLE_FORBIDDEN);
+        }
+        member.setForceLogout(true);
+        member.setForceLogoutReason(I18Consts.I18N_FORCE_LOGOUT_REASON);
+        member.setForceLogoutAt(java.time.ZonedDateTime.now());
+
+        MemberEntity savedEntity = save(member);
+        if (savedEntity == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+
+        if (savedEntity.getUser() != null) {
+                messageService.sendForceLogoutMessage(
+                    savedEntity.getUser(),
+                    savedEntity.getOrgUid(),
+                    "MEMBER",
+                    savedEntity.getUid(),
+                    savedEntity.getForceLogoutReason());
+            // 撤销该用户在本组织下的所有 token：使 admin 等无实时消息通道的前端
+            // 也立即被踢出（REST 鉴权 401 + MQTT 重连被拒），登录入口由
+            // AuthService.formatResponse 的禁用拦截兜底
+            tokenRestService.revokeAllByUserUidAndOrgUid(
+                    savedEntity.getUser().getUid(),
+                    savedEntity.getOrgUid(),
+                    TokenRestService.REVOKE_REASON_MEMBER_FORCE_LOGOUT);
+        }
+
+        return convertToResponse(savedEntity);
+    }
+
+    @Transactional
+    public MemberResponse restoreLogin(MemberRequest request) {
+        if (request == null || !StringUtils.hasText(request.getUid())) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_UID_REQUIRED);
+        }
+        // 启用成员仅组织管理员/超级管理员可操作
+        enforceOrgAdminOnly("restoreLogin");
+
+        MemberEntity member = findByUid(request.getUid())
+            .orElseThrow(ResourceI18nExceptions::memberNotFound);
+        member.setForceLogout(false);
+        member.setForceLogoutReason(null);
+        member.setForceLogoutAt(null);
+
+        MemberEntity savedEntity = save(member);
+        if (savedEntity == null) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+        }
+        return convertToResponse(savedEntity);
+    }
+
+    public void clearDepartmentUid(String deptUid) {
+        List<MemberEntity> members = memberRepository.findByDeptUidAndDeletedFalse(deptUid);
+        for (MemberEntity member : members) {
+            member.setDeptUid(null);
+            save(member);
+        }
+    }
+
+    @Cacheable(value = "member", key = "#uid", unless = "#result == null")
+    public Optional<MemberEntity> findByUid(String uid) {
+        Optional<MemberEntity> memberOptional = memberRepository.findByUid(uid);
+        if (memberOptional.isPresent()) {
+            MemberEntity member = memberOptional.get();
+            // 预加载 user 及其懒加载集合，确保 Redis 反序列化时不会报
+            // "Cannot lazily initialize collection (no session)" (user.currentRoles)
+            initializeUserRelations(member);
+        }
+        return memberOptional;
+    }
+
+    /**
+     * 预初始化 MemberEntity.user 的代理及其懒加载集合 (currentRoles/userOrganizationRoles)，
+     * 避免实体序列化进 Redis 后反序列化时 "Cannot lazily initialize collection (no session)"。
+     * 必须在事务内/持久化上下文存活时调用；会话已关闭时（如调度线程无事务上下文）直接跳过，
+     * 由 RedisCacheConfig 中注册的 Hibernate7Module 将未初始化的懒加载属性序列化为 null。
+     */
+    private void initializeUserRelations(MemberEntity member) {
+        if (member == null || member.getUser() == null) {
+            return;
+        }
+        try {
+            // 初始化 user 代理本身
+            Hibernate.initialize(member.getUser());
+            // 初始化 user 的懒加载集合
+            if (member.getUser().getCurrentRoles() != null) {
+                Hibernate.initialize(member.getUser().getCurrentRoles());
+            }
+            if (member.getUser().getUserOrganizationRoles() != null) {
+                Hibernate.initialize(member.getUser().getUserOrganizationRoles());
+            }
+        } catch (Exception e) {
+            // 持久化上下文可能已关闭（LazyInitializationException），跳过预加载不影响主流程
+            log.debug("skip initialize member user relations: uid={}, msg={}", member.getUid(), e.getMessage());
+        }
+    }
+
+    public Optional<MemberEntity> findByUserUidAndOrgUid(String uid, String orgUid) {
+        Optional<MemberEntity> memberOptional = memberRepository.findByUser_UidAndOrgUidAndDeletedFalse(uid, orgUid);
+        if (memberOptional.isPresent()) {
+            MemberEntity member = memberOptional.get();
+            // 预加载user，确保user数据被包含在缓存中
+            if (member.getUser() != null) {
+                member.getUser().getUid();
+            }
+        }
+        return memberOptional;
+    }
+
+    public Optional<MemberEntity> findByMobileAndOrgUid(String mobile, String country, String orgUid) {
+        Optional<MemberEntity> memberOptional = memberRepository.findByMobileAndCountryAndOrgUidAndDeletedFalse(
+                mobile,
+                CountryCodeUtils.normalize(country),
+                orgUid);
+        if (memberOptional.isPresent()) {
+            MemberEntity member = memberOptional.get();
+            // 预加载user，确保user数据被包含在缓存中
+            if (member.getUser() != null) {
+                member.getUser().getUid();
+            }
+        }
+        return memberOptional;
+    }
+
+    public Optional<MemberEntity> findByMobileAndOrgUid(String mobile, String orgUid) {
+        return findByMobileAndOrgUid(mobile, CountryCodeUtils.DEFAULT_COUNTRY, orgUid);
+    }
+
+    public Optional<MemberEntity> findByEmailAndOrgUid(String email, String orgUid) {
+        Optional<MemberEntity> memberOptional = memberRepository.findByEmailAndOrgUidAndDeletedFalse(email, orgUid);
+        if (memberOptional.isPresent()) {
+            MemberEntity member = memberOptional.get();
+            // 预加载user，确保user数据被包含在缓存中
+            if (member.getUser() != null) {
+                member.getUser().getUid();
+            }
+        }
+        return memberOptional;
+    }
+
+    public Optional<MemberEntity> findByUserAndOrgUid(UserEntity user, String orgUid) {
+        Optional<MemberEntity> memberOptional = memberRepository.findByUserAndOrgUidAndDeletedFalse(user, orgUid);
+        if (memberOptional.isPresent()) {
+            MemberEntity member = memberOptional.get();
+            // 预加载user，确保user数据被包含在缓存中
+            if (member.getUser() != null) {
+                member.getUser().getUid();
+            }
+        }
+        return memberOptional;
+    }
+
+    private String resolveOrgUid(String orgUid) {
+        if (StringUtils.hasText(orgUid)) {
+            return orgUid;
+        }
+        UserEntity currentUser = authService.getUser();
+        if (currentUser != null && StringUtils.hasText(currentUser.getOrgUid())) {
+            return currentUser.getOrgUid();
+        }
+        throw new IllegalArgumentException("orgUid is required");
+    }
+
+    public Boolean existsByEmailAndOrgUid(String email, String orgUid) {
+        return memberRepository.existsByEmailAndOrgUidAndDeletedFalse(email, orgUid);
+    }
+
+    public Boolean existsByMobileAndOrgUid(String mobile, String country, String orgUid) {
+        return memberRepository.existsByMobileAndCountryAndOrgUidAndDeletedFalse(
+                mobile,
+                CountryCodeUtils.normalize(country),
+                orgUid);
+    }
+
+    public Boolean existsByMobileAndOrgUid(String mobile, String orgUid) {
+        return existsByMobileAndOrgUid(mobile, CountryCodeUtils.DEFAULT_COUNTRY, orgUid);
+    }
+
+    @CachePut(value = "member", key = "#member.uid")
+    @Override
+    protected MemberEntity doSave(MemberEntity member) {
+        return memberRepository.save(member);
+    }
+
+    @Override
+    public MemberEntity handleOptimisticLockingFailureException(ObjectOptimisticLockingFailureException e,
+            MemberEntity entity) {
+        // 乐观锁处理实现
+        try {
+            Optional<MemberEntity> latest = memberRepository.findByUid(entity.getUid());
+            if (latest.isPresent()) {
+                MemberEntity latestEntity = latest.get();
+                // 合并需要保留的数据
+                // 这里可以根据业务需求合并实体
+                return memberRepository.save(latestEntity);
+            }
+        } catch (Exception ex) {
+            throw new RuntimeException("无法处理乐观锁冲突: " + ex.getMessage(), ex);
+        }
+        return null;
+    }
+
+    public void save(List<MemberEntity> members) {
+        memberRepository.saveAll(members);
+    }
+
+    @CacheEvict(value = "member", key = "#uid")
+    public void deleteByUid(String uid) {
+        Optional<MemberEntity> memberOptional = findByUid(uid);
+        memberOptional.ifPresent(member -> {
+            member.setDeleted(true);
+            save(member);
+        });
+    }
+
+    private static String normalizeExcelText(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        // 统一换行/制表符/不间断空格等，避免“看起来一样但匹配不上”的情况
+        String normalized = value
+                .replace('\u00A0', ' ') // nbsp
+                .replaceAll("[\\u0000-\\u001F\\u007F]", " ") // 控制字符
+                .replaceAll("\\s+", " ")
+                .trim();
+        return StringUtils.hasText(normalized) ? normalized : null;
+    }
+
+    public MemberEntity convertExcelToMember(MemberExcelImport excel, String orgUid) {
+        // 去重
+        if (StringUtils.hasText(excel.getEmail()) && existsByEmailAndOrgUid(excel.getEmail(), orgUid)) {
+            return null;
+        }
+        if (StringUtils.hasText(excel.getMobile())
+            && existsByMobileAndOrgUid(excel.getMobile(), CountryCodeUtils.DEFAULT_COUNTRY, orgUid)) {
+            return null;
+        }
+        assertMemberCapacityAvailable(orgUid);
+        // Excel 导入成员：默认仅赋予基础角色 ROLE_USER，避免误授予客服权限
+        Set<String> roleUids = new HashSet<>(Arrays.asList(BytedeskConsts.DEFAULT_ROLE_USER_UID));
+        // 创建member
+        MemberEntity member = modelMapper.map(excel, MemberEntity.class);
+        member.setUid(uidUtils.getUid());
+        member.setOrgUid(orgUid);
+        Set<String> importedPlatforms = MemberLoginPlatformEnum.parseImportPlatforms(excel.getAllowedLoginPlatformsText());
+        if (importedPlatforms.isEmpty() && StringUtils.hasText(excel.getAllowedLoginPlatformsText())) {
+            log.warn("Excel导入成员可登录平台无法识别，已回退为全平台: orgUid={}, nickname={}, raw={}",
+                orgUid,
+                excel.getNickname(),
+                excel.getAllowedLoginPlatformsText());
+        }
+        member.setAllowedLoginPlatforms(importedPlatforms.isEmpty()
+            ? MemberLoginPlatformEnum.allCodes()
+            : importedPlatforms);
+        // 
+        String deptName = normalizeExcelText(excel.getDepartmentName());
+        if (StringUtils.hasText(deptName)) {
+            Optional<DepartmentEntity> departmentOptional = departmentRestService.findByNameAndOrgUid(deptName, orgUid);
+            if (departmentOptional.isPresent()) {
+                member.setDeptUid(departmentOptional.get().getUid());
+            } else {
+                // 部门不存在，尝试创建；若并发/重复导致创建失败，则回退到再次查询
+                DepartmentRequest departmentRequest = DepartmentRequest.builder()
+                        .uid(uidUtils.getUid())
+                        .name(deptName)
+                        .description(deptName + " Description")
+                        .orgUid(orgUid)
+                        .build();
+                try {
+                    departmentRestService.create(departmentRequest);
+                    member.setDeptUid(departmentRequest.getUid());
+                } catch (RuntimeException ex) {
+                    Optional<DepartmentEntity> retry = departmentRestService.findByNameAndOrgUid(deptName, orgUid);
+                    if (retry.isPresent()) {
+                        member.setDeptUid(retry.get().getUid());
+                    } else {
+                        log.warn("Excel导入部门创建失败且无法回查: orgUid={}, deptName={}, err={}", orgUid, deptName, ex.getMessage());
+                    }
+                }
+            }
+        } else {
+            log.warn("Excel导入成员缺少部门信息: orgUid={}, nickname={}, email={}, mobile={}",
+                    orgUid,
+                    excel.getNickname(),
+                    excel.getEmail(),
+                    excel.getMobile());
+        }
+        // 生成user
+        // 尝试根据邮箱和平台查找用户
+        UserEntity user = null;
+        
+        try {
+            // 先尝试查找现有用户，避免创建重复用户
+            if (StringUtils.hasText(excel.getMobile())) {
+                Optional<UserEntity> existingUser = userService.findByMobileAndPlatform(
+                        excel.getMobile(), CountryCodeUtils.DEFAULT_COUNTRY, PlatformEnum.BYTEDESK.name());
+                if (existingUser.isPresent()) {
+                    user = existingUser.get();
+                }
+            } else if (StringUtils.hasText(excel.getEmail())) {
+                Optional<UserEntity> existingUser = userService.findByEmailAndPlatform(
+                        excel.getEmail(), PlatformEnum.BYTEDESK.name());
+                if (existingUser.isPresent()) {
+                    user = existingUser.get();
+                }
+            }
+            
+            // 如果没有找到现有用户，则创建新用户
+            if (user == null) {
+                UserRequest userRequest = UserRequest.builder()
+                    .avatar(AvatarConsts.getDefaultAvatarUrl())
+                    .nickname(excel.getNickname())
+                    .email(excel.getEmail())
+                    .mobile(excel.getMobile())
+                    .country(CountryCodeUtils.DEFAULT_COUNTRY)
+                    .password(excel.getPassword())
+                    .platform(PlatformEnum.BYTEDESK.name())
+                    .registerSource(RegisterSource.ADMIN.name())
+                    .orgUid(orgUid) // 确保设置组织UID，避免OrganizationRepository.findByUid接收null参数
+                    .roleUids(roleUids)
+                    .build();
+                    
+                if (!StringUtils.hasText(excel.getMobile()) && !StringUtils.hasText(excel.getEmail())) {
+                    throw new RuntimeException("mobile and email should not be both null.");
+                }
+                
+                // 直接创建用户，避免使用orElseGet回调方式
+                user = userService.createUserFromMember(userRequest);
+            }
+
+            user = userService.updateUserRoles(user, roleUids, orgUid, true);
+            
+            // 设置用户到成员对象中
+            member.setUser(user);
+            
+            // 保存成员
+            MemberEntity saveMember = save(member);
+            if (saveMember == null) {
+                throw new RuntimeException(I18Consts.I18N_MEMBER_SAVE_FAILED);
+            }
+            
+            return saveMember;
+            
+        } catch (Exception e) {
+            log.error("批量导入成员失败: {}", e.getMessage(), e);
+            throw e;
+        }
+    }
+
+     /** 同事私聊会话：org/member/{self_member_uid}/{other_member_uid} */
+    public ThreadEntity createMemberReverseThread(ThreadEntity thread) {
+        // 
+        String reverseUid = new StringBuffer(thread.getUid()).reverse().toString();
+        Optional<ThreadEntity> reverseThreadOptional = threadRestService.findByUid(reverseUid);
+        if (reverseThreadOptional.isPresent()) {
+            return reverseThreadOptional.get();
+        }
+
+        // 解析主题并获取成员UID
+        String topic = thread.getTopic();
+        String[] splits = topic.split("/");
+        if (splits.length != 4) {
+            throw new RuntimeException("reverse thread topic format error");
+        }
+        String originalMemberUid = splits[2];
+        String reverseMemberUid = splits[3];
+        // 构建反向主题
+        String reverseTopic = TopicUtils.TOPIC_ORG_MEMBER_PREFIX + reverseMemberUid + "/" + originalMemberUid;
+        // String reverseTopic = TopicUtils.getOrgMemberTopicReverse(topic);
+
+        // 查找反向成员
+        Optional<MemberEntity> reverseMemberOptional = findByUid(reverseMemberUid);
+        if (!reverseMemberOptional.isPresent()) {
+            throw new RuntimeException("getMemberReverseThread member not found");
+        }
+
+        // 创建反向线程对象
+        ThreadEntity reverseThread = ThreadEntity.builder().build();
+        reverseThread.setUid(reverseUid);
+        reverseThread.setStatus(ThreadProcessStatusEnum.CHATTING.name());
+        reverseThread.setTopic(reverseTopic);
+        // reverseThread.setUnreadCount(0);
+
+        // 设置原始成员信息（如果存在）
+        Optional<MemberEntity> originalMemberOptional = findByUid(originalMemberUid);
+        if (originalMemberOptional.isPresent()) {
+            UserProtobuf user = UserProtobuf.builder()
+                    .uid(originalMemberOptional.get().getUser().getUid())
+                    .nickname(originalMemberOptional.get().getNickname())
+                    .avatar(originalMemberOptional.get().getAvatar())
+                    .build();
+            reverseThread.setUser(JSON.toJSONString(user));
+        }
+        
+        // 设置其他线程属性
+        reverseThread.setContent(thread.getContent());
+        // reverseThread.setExtra(thread.getExtra());
+        reverseThread.setType(thread.getType());
+        // TODO: 同事私聊被动方默认不显示会话，直到收到一条消息
+        // reverseThread.setHide(true);
+        reverseThread.setChannel(ChannelEnum.SYSTEM.name());
+        reverseThread.setOrgUid(thread.getOrgUid());
+        reverseThread.setOwner(reverseMemberOptional.get().getUser());
+
+        // 保存反向线程并返回结果
+        // 注意：创建事件监听链可能乒乓触发（反向会话自身的 ThreadCreateEvent 再次调用本方法），
+        // 且原会话可能仍在外层事务中未提交导致 findByUid 查不到，并发插入会撞唯一键；
+        // 此时可插入阻塞直至对方事务提交后报 Duplicate，回查即可返回既有会话（幂等收敛）
+        ThreadEntity savedThread;
+        try {
+            savedThread = threadRestService.save(reverseThread);
+        } catch (Exception e) {
+            Optional<ThreadEntity> existingOptional = threadRestService.findByUid(reverseUid);
+            if (existingOptional.isPresent()) {
+                log.info("reverse thread already created concurrently, reuse: uid={}, topic={}",
+                        reverseUid, reverseTopic);
+                return existingOptional.get();
+            }
+            throw e;
+        }
+        if (savedThread == null) {
+            throw new RuntimeException("reverseThread save error");
+        }
+        return savedThread;
+    }
+
+    @Override
+    public void delete(MemberRequest request) {
+        removeUserFromOrg(request);
+    }
+
+    /**
+     * 组织管理员从成员列表中移除用户：
+     * - 删除(软删) MemberEntity
+     * - 同步从 UserEntity.userOrganizationRoles 中移除该组织
+     * - 若用户当前组织为该组织且仍有其它组织，则切换 currentOrganization
+     * - 吊销该用户在本组织下的所有 token（复用 forceLogout 同款链路，立即下线）
+     * - 事务提交后发布 MemberDeletedEvent，由 service 模块级联软删一对一客服并释放坐席
+     */
+    @Transactional
+    public void removeUserFromOrg(MemberRequest request) {
+        if (request == null || !StringUtils.hasText(request.getUid())) {
+            throw new RuntimeException(I18Consts.I18N_MEMBER_UID_REQUIRED);
+        }
+
+        Optional<MemberEntity> memberOptional = findByUid(request.getUid());
+        if (memberOptional.isEmpty() || memberOptional.get().isDeleted()) {
+            throw ResourceI18nExceptions.memberNotFound();
+        }
+
+        MemberEntity member = memberOptional.get();
+        final String orgUid = StringUtils.hasText(request.getOrgUid()) ? request.getOrgUid() : member.getOrgUid();
+        if (StringUtils.hasText(request.getOrgUid()) && StringUtils.hasText(member.getOrgUid())
+                && !request.getOrgUid().equals(member.getOrgUid())) {
+            throw new RuntimeException("orgUid mismatch");
+        }
+
+        final String userUid = member.getUser() != null ? member.getUser().getUid() : null;
+
+        // 先处理 user 的组织归属关系，再软删 member
+        if (member.getUser() != null && StringUtils.hasText(orgUid)) {
+            userService.removeUserFromOrganization(member.getUser().getUid(), orgUid);
+        }
+
+        deleteByUid(member.getUid());
+
+        // 被移除成员立即失效在该组织下的登录态（复用 forceLogout 同款 token 失效链路）
+        if (StringUtils.hasText(userUid) && StringUtils.hasText(orgUid)) {
+            tokenRestService.revokeAllByUserUidAndOrgUid(
+                    userUid,
+                    orgUid,
+                    TokenRestService.REVOKE_REASON_MEMBER_FORCE_LOGOUT);
+        }
+
+        // 事务提交后由 modules/service 消费：级联软删该组织下该用户的客服并释放坐席。
+        // 必须同步发布（不走 @Async 的 BytedeskEventPublisher），否则
+        // @TransactionalEventListener(AFTER_COMMIT) 无法感知事务上下文。
+        applicationEventPublisher.publishEvent(new MemberDeletedEvent(this, member));
+    }
+
+    @Override
+    public MemberResponse convertToResponse(MemberEntity entity) {
+        MemberResponse response = modelMapper.map(entity, MemberResponse.class);
+        if (entity.getUser() != null) {
+            // 预加载user，确保user数据被包含在缓存中
+            entity.getUser().getUid();
+            response.setUser(modelMapper.map(entity.getUser(), UserResponseSimple.class));
+            response.setRoles(getRolesForOrg(entity.getUser(), entity.getOrgUid()));
+            if (!StringUtils.hasText(response.getCountry()) && StringUtils.hasText(entity.getUser().getCountry())) {
+                response.setCountry(entity.getUser().getCountry());
+            }
+        }
+        return response;
+    }
+
+    private Set<RoleResponseSimple> getRolesForOrg(UserEntity user, String orgUid) {
+        if (user == null || !StringUtils.hasText(orgUid)) {
+            return new HashSet<>();
+        }
+
+        Set<String> roleUidSet = new HashSet<>();
+
+        // Prefer computing from userOrganizationRoles by orgUid to avoid relying on currentOrganization.
+        try {
+            if (user.getUserOrganizationRoles() != null) {
+                for (var uor : user.getUserOrganizationRoles()) {
+                    OrganizationEntity org = uor.getOrganization();
+                    if (org != null && orgUid.equals(org.getUid()) && uor.getRoles() != null) {
+                        for (var role : uor.getRoles()) {
+                            if (role != null && StringUtils.hasText(role.getUid())) {
+                                roleUidSet.add(role.getUid());
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // Fall back below
+        }
+
+        // Fallback to current organization roles when association isn't loaded.
+        if (roleUidSet.isEmpty()) {
+            roleUidSet.addAll(user.getRoleUids());
+        }
+
+        // Backward compatibility + enforce ROLE_USER
+        roleUidSet = normalizeRoleUids(roleUidSet);
+
+        Set<RoleResponseSimple> roles = new HashSet<>();
+        for (String roleUid : roleUidSet) {
+            try {
+                roleRestService.findByUidNoCache(roleUid)
+                        .map(role -> modelMapper.map(role, RoleResponseSimple.class))
+                        .ifPresent(roles::add);
+            } catch (Exception e) {
+                log.warn("Failed to map role uid to RoleResponse: {}", roleUid);
+            }
+        }
+        return roles;
+    }
+
+    @Override
+    public MemberExcelExport convertToExcel(MemberEntity entity) {
+        MemberExcelExport excel = modelMapper.map(entity, MemberExcelExport.class);
+        // createdAt/updatedAt 由 modelMapper 从 BaseEntity 自动映射
+        // 登录用户名：MemberEntity 本身无 username 字段，从关联 UserEntity 获取
+        if (entity.getUser() != null) {
+            excel.setUsername(entity.getUser().getUsername());
+            // 角色与成员列表接口保持一致（含强制 ROLE_USER），导出时按语言统一翻译
+            excel.setRoles(joinRoleNames(getRolesForOrg(entity.getUser(), entity.getOrgUid())));
+        }
+        // 可登录平台：Set -> 按枚举声明顺序（与前端选项一致）逗号分隔，保证导出顺序稳定
+        if (entity.getAllowedLoginPlatforms() != null && !entity.getAllowedLoginPlatforms().isEmpty()) {
+            excel.setAllowedLoginPlatforms(joinPlatformCodes(entity.getAllowedLoginPlatforms()));
+        }
+        // 设置部门名称
+        if (entity.getDeptUid() != null) {
+            Optional<DepartmentEntity> departmentOptional = departmentRestService.findByUid(entity.getDeptUid());
+            if (departmentOptional.isPresent()) {
+                excel.setDepartmentName(departmentOptional.get().getName());
+            }
+        }
+        return excel;
+    }
+
+    /**
+     * 平台编码按 MemberLoginPlatformEnum 声明顺序拼接（admin, desktop, notebase, workflow, call, callAdmin），
+     * 未知编码追加在末尾并排序，保证导出顺序与前端展示一致
+     */
+    private String joinPlatformCodes(Set<String> platforms) {
+        LinkedHashSet<String> ordered = new LinkedHashSet<>(MemberLoginPlatformEnum.allCodes());
+        ordered.retainAll(platforms);
+        // 不在枚举中的历史/自定义编码，按字典序追加在末尾
+        Set<String> unknownCodes = new TreeSet<>(platforms);
+        unknownCodes.removeAll(MemberLoginPlatformEnum.allCodes());
+        ordered.addAll(unknownCodes);
+        return ordered.stream().collect(Collectors.joining(", "));
+    }
+
+    private String joinRoleNames(Set<RoleResponseSimple> roles) {
+        if (roles == null || roles.isEmpty()) {
+            return "";
+        }
+        return roles.stream()
+                .map(r -> r.getName())
+                .filter(StringUtils::hasText)
+                .sorted()
+                .collect(Collectors.joining(", "));
+    }
+
+    @Override
+    protected Specification<MemberEntity> createSpecification(MemberRequest request) {
+        expandDeptUidToSubDeptUidsIfNeeded(request);
+        return MemberSpecification.search(request, authService);
+    }
+
+    private void expandDeptUidToSubDeptUidsIfNeeded(MemberRequest request) {
+        if (request == null) {
+            return;
+        }
+        // 1) 未传 deptUid 或者是“全部”场景（前端可能传空字符串）则不处理
+        if (!StringUtils.hasText(request.getDeptUid())) {
+            return;
+        }
+        // 2) 如果前端已经传了 subDeptUids，则尊重前端传参
+        if (request.getSubDeptUids() != null && !request.getSubDeptUids().isEmpty()) {
+            return;
+        }
+
+        Optional<DepartmentEntity> departmentOptional = departmentRestService.findByUid(request.getDeptUid());
+        if (departmentOptional.isEmpty()) {
+            return;
+        }
+
+        Set<String> descendantUids = new HashSet<>();
+        collectDescendantDepartmentUids(departmentOptional.get(), descendantUids);
+        request.setSubDeptUids(descendantUids);
+    }
+
+    private void collectDescendantDepartmentUids(DepartmentEntity department, Set<String> out) {
+        if (department == null || out == null || department.getChildren() == null || department.getChildren().isEmpty()) {
+            return;
+        }
+        for (DepartmentEntity child : department.getChildren()) {
+            if (child != null && StringUtils.hasText(child.getUid())) {
+                out.add(child.getUid());
+            }
+            collectDescendantDepartmentUids(child, out);
+        }
+    }
+
+    @Override
+    protected Page<MemberEntity> executePageQuery(Specification<MemberEntity> spec, Pageable pageable) {
+        return memberRepository.findAll(spec, pageable);
+    }
+
+
+}

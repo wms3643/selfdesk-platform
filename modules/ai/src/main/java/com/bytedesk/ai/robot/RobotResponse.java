@@ -1,0 +1,90 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-03-22 16:45:18
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-05-21 13:24:31
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.ai.robot;
+
+import com.bytedesk.ai.robot_settings.RobotSettingsResponse;
+import com.bytedesk.core.base.BaseResponse;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
+import lombok.experimental.SuperBuilder;
+
+@Data
+@SuperBuilder
+@EqualsAndHashCode(callSuper = false)
+@AllArgsConstructor
+@NoArgsConstructor
+@ToString
+public class RobotResponse extends BaseResponse {
+
+    private static final long serialVersionUID = 1L;
+
+
+    private String name;
+
+    private String nickname;
+
+    private String avatar;
+
+    private String description;
+
+    private String type;
+
+    /**
+     * Robot settings (loaded from settings entity)
+     */
+    private RobotSettingsResponse settings;
+
+    // private InviteSettings inviteSettings;
+
+    // private String defaultReply;
+
+    // 机器人分类
+    private String categoryUid;
+
+    /**
+     * Whether KB source is enabled
+     */
+    private Boolean kbSourceEnabled;
+
+    /**
+     * Whether knowledge base is enabled
+     */
+    private Boolean kbEnabled;
+
+    /**
+     * Associated knowledge base UID
+     */
+    private String kbUid;
+
+    /**
+     * Embedded LLM configuration for the robot
+     */
+    private RobotLlm llm;
+
+    // private Boolean published;
+
+    // kbEnabled/kbUid 已迁移到 RobotSettings
+
+    // flow enabled
+    // private Boolean flowEnabled;
+
+    // flow uid
+    // private String flowUid;
+
+    private Boolean system;
+}

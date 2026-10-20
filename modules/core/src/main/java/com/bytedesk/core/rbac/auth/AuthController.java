@@ -1,0 +1,416 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-01-29 16:21:24
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-09-28 14:14:25
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.core.rbac.auth;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.context.annotation.Description;
+
+import com.bytedesk.core.action.ActionTypeEnum;
+import com.bytedesk.core.annotation.ActionAnnotation;
+import com.bytedesk.core.constant.I18Consts;
+import com.bytedesk.core.exception.OrgMaxMembersExceededException;
+import com.bytedesk.core.exception.MemberForceLogoutException;
+import com.bytedesk.core.kaptcha.KaptchaRedisService;
+import com.bytedesk.core.push.PushService;
+import com.bytedesk.core.push.service.PushSendResult;
+import com.bytedesk.core.rbac.user.UserEntity;
+import com.bytedesk.core.rbac.user.UserRequest;
+import com.bytedesk.core.rbac.user.UserResponse;
+import com.bytedesk.core.rbac.user.UserService;
+import com.bytedesk.core.config.properties.BytedeskProperties;
+
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import com.bytedesk.core.utils.JsonResult;
+import com.bytedesk.core.utils.JwtUtils;
+import com.bytedesk.core.utils.CountryCodeUtils;
+import com.bytedesk.core.rbac.token.TokenRestService;
+import org.springframework.util.StringUtils;
+import org.springframework.http.HttpStatus;
+
+@Slf4j
+@RestController
+@RequestMapping("/auth/v1")
+@AllArgsConstructor
+@Tag(name = "Authentication", description = "Authentication APIs")
+@Description("Authentication Controller - User authentication and authorization management")
+public class AuthController {
+
+    private final UserService userService;
+
+    private final AuthService authService;
+
+    private final PushService pushService;
+
+    private final KaptchaRedisService kaptchaRedisService;
+
+    private final TokenRestService tokenRestService;
+
+    private final AuthLoginRetryHelper authLoginRetryHelper;
+
+    private final BytedeskProperties bytedeskProperties;
+
+    @PostMapping(value = "/register")
+    public ResponseEntity<?> register(@RequestBody UserRequest userRequest, HttpServletRequest request) {
+
+        if (!kaptchaRedisService.checkKaptcha(userRequest.getCaptchaUid(), userRequest.getCaptchaCode(),
+                userRequest.getChannel())) {
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_ERROR, -1, false));
+        }
+
+        // validate sms code
+        if (!pushService.validateCode(userRequest.getMobile(), userRequest.getCountry(), userRequest.getCode(), request)) {
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_VALIDATE_FAILED, -1, false));
+        }
+
+        UserResponse userResponse = userService.register(userRequest);
+
+        return ResponseEntity.ok(JsonResult.success("register success", userResponse));
+    }
+
+    @PostMapping("/login")
+    @ActionAnnotation(title = I18Consts.I18N_AUTH, action = I18Consts.I18N_ACTION_LOGIN_USERNAME, description = "Login With Username & Password", type = ActionTypeEnum.LOGIN)
+    public ResponseEntity<?> loginWithUsernamePassword(@RequestBody AuthRequest authRequest, HttpServletRequest request) {
+        // Avoid logging sensitive fields (password/passwordHash/passwordSalt)
+        log.debug("login request: username={}, platform={}, channel={}, deviceUid={}",
+            authRequest.getUsername(),
+            authRequest.getPlatform(),
+            authRequest.getChannel(),
+            authRequest.getDeviceUid());
+
+        // 拦截空用户名：避免空值进入查询链路后在仓储层抛出 IllegalArgumentException 堆栈
+        if (!StringUtils.hasText(authRequest.getUsername())) {
+            log.warn("Login rejected: blank username, platform={}, channel={}",
+                    authRequest.getPlatform(), authRequest.getChannel());
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_USERNAME_REQUIRED, -1, false));
+        }
+
+        // 性能测试模式：参考 IpAccessInterceptor，开启 disableIpFilter 后仅保留最基本登录验证流程
+        boolean performanceTestingEnabled = bytedeskProperties.isDisableIpFilter();
+
+        // 非性能测试模式才校验验证码；是否启用验证码由 checkKaptcha 内部统一控制
+        if (!performanceTestingEnabled) {
+            if (!kaptchaRedisService.checkKaptcha(authRequest.getCaptchaUid(), authRequest.getCaptchaCode(),
+                    authRequest.getChannel())) {
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_ERROR, -1, false));
+            }
+        }
+
+        // validate two-factor code if enabled 双重验证
+        if (!performanceTestingEnabled && authRequest.getTwoFactorEnabled() != null && authRequest.getTwoFactorEnabled()) {
+            log.debug("Two-factor authentication is enabled for user: {}", authRequest.getUsername());
+            if (!pushService.validateCode(authRequest.getMobile(), authRequest.getCountry(), authRequest.getCode(), request)) {
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_VALIDATE_FAILED, -2, false));
+            }
+            // 验证用户名和手机号是否为同一个用户
+            if (StringUtils.hasText(authRequest.getUsername()) && StringUtils.hasText(authRequest.getMobile())) {
+                Boolean userMatch = userService.existsByUsernameAndMobileAndPlatform(
+                        authRequest.getUsername(),
+                        authRequest.getMobile(),
+                    authRequest.getCountry(),
+                        authRequest.getPlatform());
+                if (!userMatch) {
+                    return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_USERNAME_MOBILE_MISMATCH, -3, false));
+                }
+            }
+        }
+
+        try {
+            // 非性能测试模式才做预登录检查（失败次数/锁定等）
+            if (!performanceTestingEnabled) {
+                ResponseEntity<?> preLoginCheckResponse = authLoginRetryHelper
+                        .performPreLoginChecks(authRequest.getUsername());
+                if (preLoginCheckResponse != null) {
+                    // 账号已锁定或达到最大失败次数，直接拒绝登录，不进入密码验证
+                    return preLoginCheckResponse;
+                }
+            }
+
+            Authentication authentication;
+            // 判断是否使用密码哈希登录
+            if (StringUtils.hasText(authRequest.getPassword())) {
+                // 使用自定义明文密码授权逻辑
+                log.debug("Using plain password authentication");
+                authentication = authService.authenticateWithPlainPassword(authRequest);
+                if (authentication == null) {
+                    return authLoginRetryHelper.handleLoginFailure(authRequest.getUsername(), I18Consts.I18N_USERNAME_OR_PASSWORD_INCORRECT);
+                }
+            } else if (StringUtils.hasText(authRequest.getPasswordHash())
+                    && StringUtils.hasText(authRequest.getPasswordSalt())) {
+                // 使用密码哈希登录（AES解密）
+                log.debug("Using password hash authentication with AES decryption for user: {}", authRequest.getUsername());
+                authentication = authService.authenticateWithPasswordHash(authRequest);
+                if (authentication == null) {
+                    return authLoginRetryHelper.handleLoginFailure(authRequest.getUsername(), I18Consts.I18N_USERNAME_OR_PASSWORD_INCORRECT);
+                }
+            } else {
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_PASSWORD_REQUIRED, -1, false));
+            }
+         
+            // 登录成功，重置失败次数（性能测试模式跳过）
+            if (!performanceTestingEnabled) {
+                authLoginRetryHelper.resetLoginFailedCount(authRequest.getUsername());
+            }
+            
+            // 格式化并返回成功响应
+            AuthResponse authResponse = authService.formatResponse(authRequest, authentication);
+            return ResponseEntity.ok(JsonResult.success(authResponse));
+
+            } catch (OrgMaxMembersExceededException e) {
+                log.info("Login blocked by org maxMembers: orgUid={}, maxMembers={}, currentDistinctUsers={}", e.getOrgUid(), e.getMaxMembers(), e.getCurrentDistinctUsers());
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+            } catch (MemberForceLogoutException e) {
+                log.info("Login blocked by member forceLogout: userUid={}, orgUid={}", e.getUserUid(), e.getOrgUid());
+                // HTTP 200 + code 403：与登录错误约定一致，前端登录页内联展示并翻译 i18n key
+                return ResponseEntity.ok().body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+            } catch (IllegalArgumentException e) {
+                // 参数校验类错误（如空用户名/平台触发的仓储层非空校验）：仅记录简要信息，不打印异常堆栈
+                log.warn("Authentication rejected: invalid request parameter: username={}, platform={}, channel={}, reason={}",
+                        authRequest.getUsername(), authRequest.getPlatform(), authRequest.getChannel(), e.getMessage());
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_USERNAME_OR_PASSWORD_INCORRECT, -1, false));
+            } catch (Exception e) {
+            // Always log stacktrace for troubleshooting; do not include raw credential fields
+            log.error("Authentication failed: username={}, platform={}, channel={}",
+                    authRequest.getUsername(), authRequest.getPlatform(), authRequest.getChannel(), e);
+
+            // Only return decrypt-specific message when the exception strongly indicates a decrypt issue.
+            // (AuthService may also swallow decrypt errors and return null; in that case this catch won't run.)
+            String msg = e.getMessage();
+            boolean looksLikeDecryptError = StringUtils.hasText(authRequest.getPasswordHash())
+                    && (StringUtils.hasText(msg)
+                            && (msg.contains("密码解密失败")
+                                    || msg.contains("BadPadding")
+                                    || msg.contains("IllegalBlockSize")
+                                    || msg.contains("Base64")
+                                    || msg.contains("生成密钥失败")
+                                    || msg.contains(I18Consts.I18N_PASSWORD_DECRYPT_FAILED)
+                                    || msg.contains(I18Consts.I18N_PASSWORD_DECRYPT_KEY_INVALID)
+                                    || msg.contains(I18Consts.I18N_PASSWORD_KEY_GENERATE_FAILED)
+                                    || msg.contains("解密失败")));
+            if (looksLikeDecryptError) {
+                log.warn("Password decrypt failed: username={}, platform={}, channel={} (passwordHash present)",
+                        authRequest.getUsername(), authRequest.getPlatform(), authRequest.getChannel());
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_PASSWORD_DECRYPT_FAILED, -1, false));
+            }
+            // 性能测试模式下，避免额外的失败次数写入/锁定逻辑
+            if (performanceTestingEnabled) {
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_USERNAME_OR_PASSWORD_INCORRECT, -1, false));
+            }
+            return authLoginRetryHelper.handleLoginFailure(authRequest.getUsername(), I18Consts.I18N_USERNAME_OR_PASSWORD_INCORRECT);
+        }
+    }
+
+    @PostMapping("/send/mobile")
+    public ResponseEntity<?> sendMobileCode(@RequestBody AuthRequest authRequest, HttpServletRequest request) {
+        log.debug("send mobile code {}, channel {}, type {}", authRequest.toString(), authRequest.getChannel(),
+                authRequest.getType());
+
+        if (!kaptchaRedisService.checkKaptcha(authRequest.getCaptchaUid(), authRequest.getCaptchaCode(),
+                authRequest.getChannel())) {
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_ERROR, -1, false));
+        }
+
+        // send mobile code
+        PushSendResult result = pushService.sendCode(authRequest, request);
+        if (!result.isSuccess()) {
+            String errorMessage = result.getErrorMessage(); //Utils.getErrorMessage(result.getErrorType());
+            return ResponseEntity.ok().body(JsonResult.error(errorMessage, -2, false));
+        }
+
+        return ResponseEntity.ok().body(JsonResult.success(I18Consts.I18N_AUTH_CAPTCHA_SEND_SUCCESS));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_AUTH, action = I18Consts.I18N_ACTION_LOGIN_MOBILE, description = "Login With mobile & code", type = ActionTypeEnum.LOGIN)
+    @PostMapping("/login/mobile")
+    public ResponseEntity<?> loginWithMobileCode(@RequestBody AuthRequest authRequest, HttpServletRequest request) {
+        log.debug("login mobile {}", authRequest.toString());
+
+        if (!kaptchaRedisService.checkKaptcha(authRequest.getCaptchaUid(), authRequest.getCaptchaCode(),
+                authRequest.getChannel())) {
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_ERROR, -1, false));
+        }
+
+        // validate mobile & code
+        if (!pushService.validateCode(authRequest.getMobile(), authRequest.getCountry(), authRequest.getCode(), request)) {
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_VALIDATE_FAILED, -2, false));
+        }
+
+        // if mobile already exists, if none, then register
+        // 手机号是否已经注册，如果没有，则自动注册
+        if (!userService.existsByMobileAndPlatform(authRequest.getMobile(), authRequest.getCountry(), authRequest.getPlatform())) {
+            if (!Boolean.TRUE.equals(bytedeskProperties.getCustom().getAutoRegisterOnLogin())) {
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_USER_NOT_REGISTERED, -3, false));
+            }
+            UserRequest userRequest = new UserRequest();
+            userRequest.setUsername(CountryCodeUtils.buildMobileUsername(authRequest.getCountry(), authRequest.getMobile()));
+            userRequest.setCountry(authRequest.getCountry());
+            userRequest.setNum(authRequest.getMobile());
+            userRequest.setMobile(authRequest.getMobile());
+            userRequest.setPlatform(authRequest.getPlatform());
+            userRequest.setEmailVerified(false);
+            // 默认注册时，仅验证手机号，无需验证邮箱
+            userRequest.setMobileVerified(true);
+            // 注册来源：手机号验证码登录自动注册
+            userRequest.setRegisterSource(UserEntity.RegisterSource.MOBILE.name());
+            userService.register(userRequest);
+        } else {
+            // 如果用户已存在，检查并更新手机验证状态
+            userService.findByMobileAndPlatform(authRequest.getMobile(), authRequest.getCountry(), authRequest.getPlatform())
+                .ifPresent(user -> {
+                    if (!user.isMobileVerified()) {
+                        user.setMobileVerified(true);
+                        userService.save(user);
+                        log.info("Updated mobile verification status for user: {}", user.getUid());
+                    }
+                });
+        }
+
+        Authentication authentication = authService.authenticationWithMobileAndPlatform(
+                authRequest.getMobile(),
+            authRequest.getCountry(),
+                authRequest.getPlatform(),
+                authRequest.getChannel(),
+                authRequest.getDevice());
+        //
+        try {
+            AuthResponse authResponse = authService.formatResponse(authRequest, authentication);
+            return ResponseEntity.ok(JsonResult.success(authResponse));
+        } catch (OrgMaxMembersExceededException e) {
+            log.info("Login blocked by org maxMembers: orgUid={}, maxMembers={}, currentDistinctUsers={}", e.getOrgUid(), e.getMaxMembers(), e.getCurrentDistinctUsers());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+        } catch (MemberForceLogoutException e) {
+            log.info("Login blocked by member forceLogout: userUid={}, orgUid={}", e.getUserUid(), e.getOrgUid());
+            // HTTP 200 + code 403：与登录错误约定一致，前端登录页内联展示并翻译 i18n key
+            return ResponseEntity.ok().body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+        }
+    }
+
+    @PostMapping("/send/email")
+    public ResponseEntity<?> sendEmailCode(@RequestBody AuthRequest authRequest, HttpServletRequest request) {
+        log.debug("send email code {}", authRequest.toString());
+
+        if (!kaptchaRedisService.checkKaptcha(authRequest.getCaptchaUid(), authRequest.getCaptchaCode(),
+                authRequest.getChannel())) {
+            return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_ERROR, -1, false));
+        }
+        // send email code
+        PushSendResult result = pushService.sendCode(authRequest, request);
+        if (!result.isSuccess()) {
+            String errorMessage = result.getErrorMessage(); //Utils.getErrorMessage(result.getErrorType());
+            return ResponseEntity.ok().body(JsonResult.error(errorMessage, -2, false));
+        }
+
+        return ResponseEntity.ok(JsonResult.success(I18Consts.I18N_AUTH_CAPTCHA_SEND_SUCCESS));
+    }
+
+    @ActionAnnotation(title = I18Consts.I18N_AUTH, action = I18Consts.I18N_ACTION_LOGIN_EMAIL, description = "Login With email & code", type = ActionTypeEnum.LOGIN)
+    @PostMapping("/login/email")
+    public ResponseEntity<?> loginWithEmailCode(@RequestBody AuthRequest authRequest, HttpServletRequest request) {
+        log.debug("login email {}", authRequest.toString());
+
+        // validate email & code
+        if (!pushService.validateCode(authRequest.getEmail(), authRequest.getCode(), request)) {
+            return ResponseEntity.ok(JsonResult.error(I18Consts.I18N_AUTH_CAPTCHA_VALIDATE_FAILED, -1, false));
+        }
+
+        // 邮箱是否已经注册，如果没有，则自动注册
+        if (!userService.existsByEmailAndPlatform(authRequest.getEmail(),
+                authRequest.getPlatform())) {
+            if (!Boolean.TRUE.equals(bytedeskProperties.getCustom().getAutoRegisterOnLogin())) {
+                return ResponseEntity.ok().body(JsonResult.error(I18Consts.I18N_AUTH_USER_NOT_REGISTERED, -2, false));
+            }
+            UserRequest userRequest = new UserRequest();
+            userRequest.setUsername(authRequest.getEmail());
+            userRequest.setNum(authRequest.getEmail());
+            userRequest.setEmail(authRequest.getEmail());
+            userRequest.setPlatform(authRequest.getPlatform());
+            userRequest.setEmailVerified(true);
+            userRequest.setMobileVerified(false);
+            // 注册来源：邮箱验证码登录自动注册
+            userRequest.setRegisterSource(UserEntity.RegisterSource.EMAIL.name());
+            userService.register(userRequest);
+        } else {
+            // 如果用户已存在，检查并更新邮箱验证状态
+            userService.findByEmailAndPlatform(authRequest.getEmail(), authRequest.getPlatform())
+                .ifPresent(user -> {
+                    if (!user.isEmailVerified()) {
+                        user.setEmailVerified(true);
+                        userService.save(user);
+                        log.info("Updated email verification status for user: {}", user.getUid());
+                    }
+                });
+        }
+
+        Authentication authentication = authService.authenticationWithEmailAndPlatform(
+                authRequest.getEmail(),
+                authRequest.getPlatform(),
+                authRequest.getChannel(),
+                authRequest.getDevice());
+        //
+        try {
+            AuthResponse authResponse = authService.formatResponse(authRequest, authentication);
+            return ResponseEntity.ok(JsonResult.success(authResponse));
+        } catch (OrgMaxMembersExceededException e) {
+            log.info("Login blocked by org maxMembers: orgUid={}, maxMembers={}, currentDistinctUsers={}", e.getOrgUid(), e.getMaxMembers(), e.getCurrentDistinctUsers());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+        } catch (MemberForceLogoutException e) {
+            log.info("Login blocked by member forceLogout: userUid={}, orgUid={}", e.getUserUid(), e.getOrgUid());
+            // HTTP 200 + code 403：与登录错误约定一致，前端登录页内联展示并翻译 i18n key
+            return ResponseEntity.ok().body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+        }
+    }
+
+    @PostMapping("/login/accessToken")
+    @ActionAnnotation(title = I18Consts.I18N_AUTH, action = I18Consts.I18N_ACTION_LOGIN_ACCESS_TOKEN, description = "Login With Access Token", type = ActionTypeEnum.LOGIN)
+    public ResponseEntity<?> loginWithAccessToken(@RequestBody AuthRequest authRequest, HttpServletRequest request) {
+        log.debug("validate accessToken {}", authRequest.getAccessToken());
+
+        boolean isValid = tokenRestService.validateAccessToken(authRequest.getAccessToken());
+        if (!isValid) {
+            return ResponseEntity.ok(JsonResult.error(I18Consts.I18N_AUTH_ACCESS_TOKEN_INVALID, -1, false));
+        }
+
+        // Extract subject (username) from the access token
+        String subject = JwtUtils.getSubjectFromJwtToken(authRequest.getAccessToken());
+        
+        // Get authentication using the subject
+        Authentication authentication = authService.getAuthentication(request, subject);
+        
+        // Format response similar to other login methods
+        try {
+            AuthResponse authResponse = authService.formatResponse(authRequest, authentication);
+            return ResponseEntity.ok(JsonResult.success(authResponse));
+        } catch (OrgMaxMembersExceededException e) {
+            log.info("Login blocked by org maxMembers: orgUid={}, maxMembers={}, currentDistinctUsers={}", e.getOrgUid(), e.getMaxMembers(), e.getCurrentDistinctUsers());
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+        } catch (MemberForceLogoutException e) {
+            log.info("Login blocked by member forceLogout: userUid={}, orgUid={}", e.getUserUid(), e.getOrgUid());
+            // HTTP 200 + code 403：与登录错误约定一致，前端登录页内联展示并翻译 i18n key
+            return ResponseEntity.ok().body(JsonResult.error(e.getMessage(), HttpStatus.FORBIDDEN.value(), false));
+        }
+    }
+
+
+}

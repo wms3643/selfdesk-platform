@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC" xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:flowable="http://flowable.org/bpmn" targetNamespace="BytedeskThread" exporter="Flowable Open Source Modeler" exporterVersion="6.8.0">
+  <process id="threadProcess" name="会话流程" isExecutable="true">
+    <extensionElements>
+      <flowable:executionListener event="start" delegateExpression="${threadExecutionListener}" />
+      <flowable:executionListener event="end" delegateExpression="${threadExecutionListener}" />
+    </extensionElements>
+    <startEvent id="start" name="访客发起会话" flowable:formFieldValidation="true" />
+    <exclusiveGateway id="isRobotEnabled" name="机器人接待?" />
+    <sequenceFlow id="flow1" sourceRef="start" targetRef="isRobotEnabled" />
+    <serviceTask id="robotService" name="机器人接待" flowable:delegateExpression="${threadRobotServiceDelegate}" />
+    <serviceTask id="robotIdleTimeoutService" name="访客超时未发消息" flowable:delegateExpression="${threadRobotIdleTimeoutServiceDelegate}" />
+    <sequenceFlow id="flowRobotTimeoutToEnd" sourceRef="robotIdleTimeoutService" targetRef="end" />
+    <sequenceFlow id="flow2" sourceRef="isRobotEnabled" targetRef="robotService">
+      <conditionExpression xsi:type="tFormalExpression">${robotEnabled == true}</conditionExpression>
+    </sequenceFlow>
+    <userTask id="transferToHumanTask" name="转人工客服" flowable:formFieldValidation="true">
+      <documentation>机器人接待阶段，通过UI按钮或关键词触发转人工服务</documentation>
+      <extensionElements>
+        <flowable:executionListener event="start" delegateExpression="${threadExecutionListener}" />
+        <flowable:executionListener event="end" delegateExpression="${threadExecutionListener}" />
+        <flowable:taskListener event="create" delegateExpression="${threadTaskListener}" />
+        <flowable:taskListener event="complete" delegateExpression="${threadTaskListener}" />
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="flow3" sourceRef="robotService" targetRef="transferToHumanTask" />
+    <exclusiveGateway id="isAgentsBusy" name="坐席繁忙?" />
+    <sequenceFlow id="flow5" sourceRef="transferToHumanTask" targetRef="isAgentsOffline">
+      <conditionExpression xsi:type="tFormalExpression">${needHumanService == true}</conditionExpression>
+    </sequenceFlow>
+    <exclusiveGateway id="isAgentsOffline" name="客服离线?" />
+    <sequenceFlow id="flow6" sourceRef="isRobotEnabled" targetRef="isAgentsOffline">
+      <conditionExpression xsi:type="tFormalExpression">${robotEnabled == false}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flow17" sourceRef="isAgentsOffline" targetRef="isAgentsBusy">
+      <conditionExpression xsi:type="tFormalExpression">${agentsOffline == false}</conditionExpression>
+    </sequenceFlow>
+    <serviceTask id="queueService" name="排队等待" flowable:delegateExpression="${threadQueueServiceDelegate}" />
+    <sequenceFlow id="flow7" sourceRef="isAgentsBusy" targetRef="queueService">
+      <conditionExpression xsi:type="tFormalExpression">${agentsBusy == true}</conditionExpression>
+    </sequenceFlow>
+    <userTask id="humanService" name="人工接待" flowable:candidateGroups="${workgroupUid != null ? workgroupUid : &#39;&#39;}" flowable:formFieldValidation="true">
+      <documentation>客服人员接待访客，流程外处理流转和协助</documentation>
+      <extensionElements>
+        <flowable:executionListener event="start" delegateExpression="${threadExecutionListener}" />
+        <flowable:executionListener event="end" delegateExpression="${threadExecutionListener}" />
+        <flowable:taskListener event="create" delegateExpression="${threadTaskListener}" />
+        <flowable:taskListener event="assignment" delegateExpression="${threadTaskListener}" />
+        <flowable:taskListener event="complete" delegateExpression="${threadTaskListener}" />
+      </extensionElements>
+    </userTask>
+    <sequenceFlow id="flow8" sourceRef="queueService" targetRef="humanService" />
+    <sequenceFlow id="flow9" sourceRef="isAgentsBusy" targetRef="humanService">
+      <conditionExpression xsi:type="tFormalExpression">${agentsBusy == false}</conditionExpression>
+    </sequenceFlow>
+    <boundaryEvent id="slaTimer" cancelActivity="false" attachedToRef="humanService">
+      <timerEventDefinition>
+        <timeDuration>${slaTimeISO != null ? slaTimeISO : 'PT30M'}</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+    <serviceTask id="slaNotification" name="SLA超时通知" flowable:delegateExpression="${threadSLATimeoutNotificationDelegate}" />
+    <sequenceFlow id="flow10" sourceRef="slaTimer" targetRef="slaNotification" />
+    <serviceTask id="transferService" name="转接服务" flowable:delegateExpression="${threadTransferServiceDelegate}" />
+    <sequenceFlow id="flow12" sourceRef="transferService" targetRef="humanService" />
+    <serviceTask id="inviteService" name="邀请协助" flowable:delegateExpression="${threadInviteServiceDelegate}" />
+    <sequenceFlow id="flow13" sourceRef="humanService" targetRef="inviteService">
+      <conditionExpression xsi:type="tFormalExpression">${status == 'INVITE'}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flow14" sourceRef="inviteService" targetRef="humanService" />
+    <serviceTask id="satisfactionService" name="满意度评价" flowable:delegateExpression="${threadSatisfactionServiceDelegate}">
+      <documentation>触发满意度评价事件</documentation>
+      <extensionElements>
+        <flowable:executionListener event="end" delegateExpression="${threadExecutionListener}" />
+      </extensionElements>
+    </serviceTask>
+    <sequenceFlow id="flow15" sourceRef="humanService" targetRef="satisfactionService">
+      <conditionExpression xsi:type="tFormalExpression">${status == 'RESOLVED'}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowFinishToEnd" sourceRef="humanService" targetRef="end">
+      <conditionExpression xsi:type="tFormalExpression">${status == 'FINISHED'}</conditionExpression>
+    </sequenceFlow>
+    <endEvent id="end" name="会话结束" />
+    <sequenceFlow id="flow16" sourceRef="satisfactionService" targetRef="end" />
+    <sequenceFlow id="flow11" sourceRef="humanService" targetRef="transferService">
+      <conditionExpression xsi:type="tFormalExpression">${status == 'TRANSFER'}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowRobotTimeout" sourceRef="robotIdleTimer" targetRef="robotIdleTimeoutService" />
+    <boundaryEvent id="robotIdleTimer" attachedToRef="robotService">
+      <timerEventDefinition>
+        <timeDuration>${robotIdleTimeoutISO != null ? robotIdleTimeoutISO : 'PT5M'}</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+    <serviceTask id="humanIdleTimeoutService" name="访客在人工接待中超时未发消息" flowable:delegateExpression="${threadHumanIdleTimeoutServiceDelegate}" />
+    <sequenceFlow id="flowHumanTimeoutToEnd" sourceRef="humanIdleTimeoutService" targetRef="end" />
+    <boundaryEvent id="humanIdleTimer" attachedToRef="humanService">
+      <timerEventDefinition>
+        <timeDuration>${humanIdleTimeoutISO != null ? humanIdleTimeoutISO : 'PT15M'}</timeDuration>
+      </timerEventDefinition>
+    </boundaryEvent>
+    <sequenceFlow id="flowHumanTimeout" sourceRef="humanIdleTimer" targetRef="humanIdleTimeoutService" />
+    <serviceTask id="agentsOfflineService" name="坐席离线处理" flowable:delegateExpression="${threadAgentsOfflineServiceDelegate}" />
+    <sequenceFlow id="flow18" sourceRef="isAgentsOffline" targetRef="agentsOfflineService">
+      <conditionExpression xsi:type="tFormalExpression">${agentsOffline == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowOfflineToEnd" sourceRef="agentsOfflineService" targetRef="end" />
+  </process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_threadProcess-1">
+    <bpmndi:BPMNPlane id="BPMNPlane_threadProcess-1" bpmnElement="threadProcess">
+      <bpmndi:BPMNShape id="BPMNShape_start" bpmnElement="start">
+        <omgdc:Bounds x="25" y="315" width="30" height="30" />
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds x="7" y="345" width="66" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_isRobotEnabled" bpmnElement="isRobotEnabled" isMarkerVisible="true">
+        <omgdc:Bounds x="108" y="310" width="40" height="40" />
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds x="97" y="350" width="62" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_robotService" bpmnElement="robotService">
+        <omgdc:Bounds x="78" y="180" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_robotIdleTimeoutService" bpmnElement="robotIdleTimeoutService">
+        <omgdc:Bounds x="410" y="65" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_transferToHumanTask" bpmnElement="transferToHumanTask">
+        <omgdc:Bounds x="220" y="180" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_isAgentsBusy" bpmnElement="isAgentsBusy" isMarkerVisible="true">
+        <omgdc:Bounds x="320" y="310" width="40" height="40" />
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds x="314" y="286" width="51" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_isAgentsOffline" bpmnElement="isAgentsOffline" isMarkerVisible="true">
+        <omgdc:Bounds x="240" y="310" width="40" height="40" />
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds x="235" y="350" width="51" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_queueService" bpmnElement="queueService">
+        <omgdc:Bounds x="410" y="475" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_humanService" bpmnElement="humanService">
+        <omgdc:Bounds x="520" y="300" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_slaNotification" bpmnElement="slaNotification">
+        <omgdc:Bounds x="410" y="385" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_transferService" bpmnElement="transferService">
+        <omgdc:Bounds x="680" y="220" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_inviteService" bpmnElement="inviteService">
+        <omgdc:Bounds x="690" y="400" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_satisfactionService" bpmnElement="satisfactionService">
+        <omgdc:Bounds x="680" y="300" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_end" bpmnElement="end">
+        <omgdc:Bounds x="830" y="316" width="28" height="28" />
+        <bpmndi:BPMNLabel>
+          <omgdc:Bounds x="868" y="323" width="44" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_agentsOfflineService" bpmnElement="agentsOfflineService">
+        <omgdc:Bounds x="350" y="550" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_humanIdleTimeoutService" bpmnElement="humanIdleTimeoutService">
+        <omgdc:Bounds x="640" y="110" width="100" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_humanIdleTimer" bpmnElement="humanIdleTimer">
+        <omgdc:Bounds x="520.5" y="283.5" width="31" height="31" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_robotIdleTimer" bpmnElement="robotIdleTimer">
+        <omgdc:Bounds x="114" y="164" width="31" height="31" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_slaTimer" bpmnElement="slaTimer">
+        <omgdc:Bounds x="560.5" y="345.5" width="31" height="31" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow1" bpmnElement="flow1" flowable:sourceDockerX="15.0" flowable:sourceDockerY="15.0" flowable:targetDockerX="20.0" flowable:targetDockerY="20.0">
+        <omgdi:waypoint x="55" y="330" />
+        <omgdi:waypoint x="108" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flowRobotTimeoutToEnd" bpmnElement="flowRobotTimeoutToEnd" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="14.0" flowable:targetDockerY="14.0">
+        <omgdi:waypoint x="510" y="95" />
+        <omgdi:waypoint x="844" y="95" />
+        <omgdi:waypoint x="844" y="316" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow2" bpmnElement="flow2" flowable:sourceDockerX="20.0" flowable:sourceDockerY="20.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="128" y="310" />
+        <omgdi:waypoint x="128" y="240" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow3" bpmnElement="flow3" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="178" y="210" />
+        <omgdi:waypoint x="220" y="210" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow5" bpmnElement="flow5" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="20.0" flowable:targetDockerY="20.0">
+        <omgdi:waypoint x="260" y="240" />
+        <omgdi:waypoint x="260" y="310" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow6" bpmnElement="flow6" flowable:sourceDockerX="20.0" flowable:sourceDockerY="20.0" flowable:targetDockerX="20.0" flowable:targetDockerY="20.0">
+        <omgdi:waypoint x="148" y="330" />
+        <omgdi:waypoint x="240" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow17" bpmnElement="flow17" flowable:sourceDockerX="20.0" flowable:sourceDockerY="20.0" flowable:targetDockerX="20.0" flowable:targetDockerY="20.0">
+        <omgdi:waypoint x="280" y="330" />
+        <omgdi:waypoint x="320" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow7" bpmnElement="flow7" flowable:sourceDockerX="20.0" flowable:sourceDockerY="20.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="340" y="349.94430325528265" />
+        <omgdi:waypoint x="340" y="505" />
+        <omgdi:waypoint x="410" y="505" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow8" bpmnElement="flow8" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="509.95000000000005" y="505" />
+        <omgdi:waypoint x="570" y="505" />
+        <omgdi:waypoint x="570" y="359.95" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow9" bpmnElement="flow9" flowable:sourceDockerX="20.0" flowable:sourceDockerY="20.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="359.9456649279751" y="330" />
+        <omgdi:waypoint x="520" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow10" bpmnElement="flow10" flowable:sourceDockerX="15.5" flowable:sourceDockerY="15.5" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="561.9446216660114" y="367.52191442946304" />
+        <omgdi:waypoint x="509.95000000000005" y="391.7241379310345" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow12" bpmnElement="flow12" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="730" y="220" />
+        <omgdi:waypoint x="730" y="180" />
+        <omgdi:waypoint x="570" y="180" />
+        <omgdi:waypoint x="570" y="300" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow13" bpmnElement="flow13" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="600.4659345391904" y="359.95" />
+        <omgdi:waypoint x="629" y="388" />
+        <omgdi:waypoint x="690" y="411.0810810810811" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow14" bpmnElement="flow14" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="689.9999999999999" y="401.42857142857156" />
+        <omgdi:waypoint x="642" y="374" />
+        <omgdi:waypoint x="618.9989192263936" y="359.95" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow15" bpmnElement="flow15" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="619.9499999999999" y="330" />
+        <omgdi:waypoint x="680" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow16" bpmnElement="flow16" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="14.0" flowable:targetDockerY="14.0">
+        <omgdi:waypoint x="779.949999999996" y="330" />
+        <omgdi:waypoint x="830" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow11" bpmnElement="flow11" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="619.9499999999999" y="305" />
+        <omgdi:waypoint x="680" y="274.975" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flowRobotTimeout" bpmnElement="flowRobotTimeout" flowable:sourceDockerX="15.5" flowable:sourceDockerY="15.5" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="129" y="164" />
+        <omgdi:waypoint x="129" y="95" />
+        <omgdi:waypoint x="410" y="95" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flowHumanTimeoutToEnd" bpmnElement="flowHumanTimeoutToEnd" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="14.0" flowable:targetDockerY="14.0">
+        <omgdi:waypoint x="740" y="140" />
+        <omgdi:waypoint x="844" y="140" />
+        <omgdi:waypoint x="844" y="316" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flowHumanTimeout" bpmnElement="flowHumanTimeout" flowable:sourceDockerX="15.5" flowable:sourceDockerY="15.5" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="536" y="284" />
+        <omgdi:waypoint x="535" y="140" />
+        <omgdi:waypoint x="640" y="140" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flow18" bpmnElement="flow18" flowable:sourceDockerX="20.0" flowable:sourceDockerY="20.0" flowable:targetDockerX="50.0" flowable:targetDockerY="30.0">
+        <omgdi:waypoint x="260" y="350" />
+        <omgdi:waypoint x="260" y="580" />
+        <omgdi:waypoint x="350" y="580" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flowOfflineToEnd" bpmnElement="flowOfflineToEnd" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="14.0" flowable:targetDockerY="14.0">
+        <omgdi:waypoint x="450" y="580" />
+        <omgdi:waypoint x="844" y="580" />
+        <omgdi:waypoint x="844" y="344" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_flowFinishToEnd" bpmnElement="flowFinishToEnd" flowable:sourceDockerX="50.0" flowable:sourceDockerY="30.0" flowable:targetDockerX="14.0" flowable:targetDockerY="14.0">
+        <omgdi:waypoint x="619.9499999999999" y="330" />
+        <omgdi:waypoint x="830" y="330" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

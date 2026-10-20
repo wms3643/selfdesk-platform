@@ -1,0 +1,90 @@
+/*
+ * @Author: jackning 270580156@qq.com
+ * @Date: 2024-12-23 16:10:20
+ * @LastEditors: jackning 270580156@qq.com
+ * @LastEditTime: 2025-02-24 16:50:24
+ * @Description: bytedesk.com https://github.com/Bytedesk/bytedesk
+ *   Please be aware of the BSL license restrictions before installing Bytedesk IM – 
+ *  selling, reselling, or hosting Bytedesk IM as a service is a breach of the terms and automatically terminates your rights under the license.
+ *  Business Source License 1.1: https://github.com/Bytedesk/bytedesk/blob/main/LICENSE 
+ *  contact: 270580156@qq.com 
+ *  联系：270580156@qq.com
+ * Copyright (c) 2024 by bytedesk.com, All Rights Reserved. 
+ */
+package com.bytedesk.kbase.auto_reply.settings;
+
+import java.io.Serializable;
+
+import com.bytedesk.core.constant.BytedeskConsts;
+import com.bytedesk.core.message.enums.MessageTypeEnum;
+
+import jakarta.persistence.Embeddable;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
+
+@Data
+@EqualsAndHashCode(callSuper = false)
+@Embeddable
+@Builder
+@Accessors(chain = true)
+@AllArgsConstructor
+@NoArgsConstructor
+public class AutoReplySettingsResponse implements Serializable {
+
+    // 自动回复开关
+    private static final long serialVersionUID = 1L;
+
+    @Builder.Default
+    private Boolean autoReplyEnabled = false;
+
+    // 自动回复类型
+    @Builder.Default
+    private String autoReplyType = AutoReplyTypeEnum.FIXED.name();
+    
+    // 自动回复内容类型
+    @Builder.Default
+    private String autoReplyContentType = MessageTypeEnum.TEXT.name();
+
+    // 固定回复类型所需要字段
+    @Builder.Default
+    private String autoReplyUid = BytedeskConsts.EMPTY_STRING;
+
+    // 自动回复内容
+    @Builder.Default
+    private String autoReplyContent = BytedeskConsts.EMPTY_STRING;
+
+    // 关键词回复类型所需要字段
+    private String kbUid;
+
+    // 暂时停用大模型接管会话配置
+    // @Builder.Default
+    // private Boolean takeoverEnabled = false;
+
+    // 暂时停用接管会话机器人配置
+    // @Builder.Default
+    // private String robotUid = BytedeskConsts.EMPTY_STRING;
+
+    /**
+     * 从 AutoReplySettings 实体创建 AutoReplySettingsResponse
+     * @param settings AutoReplySettings 实体
+     * @return AutoReplySettingsResponse 对象,如果 settings 为 null 则返回 null
+     */
+    public static AutoReplySettingsResponse fromEntity(AutoReplySettingsEntity settings) {
+        if (settings == null) {
+            return null;
+        }
+        return AutoReplySettingsResponse.builder()
+                .autoReplyEnabled(settings.getAutoReplyEnabled())
+                .autoReplyType(settings.getAutoReplyType())
+                // .autoReplyUid(settings.getAutoReplyUid())
+                .autoReplyContentType(settings.getAutoReplyContentType())
+                .autoReplyContent(settings.getAutoReplyContent())
+                .kbUid(settings.getKbUid())
+                .build();
+    }
+
+}
