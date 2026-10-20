@@ -1,0 +1,12 @@
+.git
+target
+**/target
+node_modules
+images
+jmeter
+docs
+deploy
+.github
+*.jar
+*.log
+data

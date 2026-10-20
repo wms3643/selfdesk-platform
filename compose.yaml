@@ -1,0 +1,49 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: selfdesk-es
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "19200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: selfdesk-app
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: open
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+      SPRING_AI_DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      SPRING_AI_DEEPSEEK_CHAT_OPTIONS_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      BYTEDESK_ADMIN_PASSWORD: ${BYTEDESK_ADMIN_PASSWORD:-SelfDesk#2026}
+      JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx1280m}
+    ports:
+      - "9003:9003"
+    volumes:
+      - appdata:/app/data
+    restart: unless-stopped
+
+volumes:
+  esdata:
+  appdata:

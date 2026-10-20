@@ -92,14 +92,37 @@ AI 侧提供两套可切换实现：**Spring AI 直连**（单进程）与 **Pyt
 
 | 类别 | 依赖 | 版本 | 是否必需 |
 |---|---|---|---|
-| 运行时 | JDK | 21 | 必需 |
-| 构建 | Maven（内置 wrapper `mvnw` / `mvnw.cmd`） | 3.9.9 | 必需 |
-| 检索 | Elasticsearch | 8.x | 必需（知识库与向量检索） |
+| 容器 | Docker + Compose | 20+ | 方式一必需 |
+| 运行时 | JDK | 21 | 方式二必需 |
+| 构建 | Maven（内置 wrapper `mvnw` / `mvnw.cmd`） | 3.9.9 | 方式二必需 |
+| 检索 | Elasticsearch | 8.x | 必需（Docker 方式自动拉起） |
 | 缓存 | Redis | 7.x | 可选（`bytedesk.cache.level=0` 时不需要） |
 | 数据库 | H2 / MySQL / PostgreSQL | — | 至少一个，默认 H2 |
 | 部署脚本 | Python | 3.10+ | 可选（`pip install -r deploy-selfdesk/requirements.txt`） |
 
 ## 快速开始
+
+### 方式一：Docker 一键启动（推荐）
+
+只需要 Docker，本机不用装 JDK、Maven、Elasticsearch：
+
+```bash
+cp .env.example .env        # 填 DEEPSEEK_API_KEY；留空也能启动，只是 AI 不回答
+docker compose up -d --build
+```
+
+首次构建会编译 24 个模块，约 10 分钟（之后有缓存）。启动后：
+
+| 入口 | 地址 |
+|---|---|
+| 访客端 | http://localhost:9003/chat/ |
+| 客服工作台 | http://localhost:9003/console/ |
+| 管理后台 | http://localhost:9003/admin |
+
+数据落在两个命名卷里（`esdata` 索引、`appdata` H2 业务库），`docker compose down` 不会丢；
+要清空用 `docker compose down -v`。
+
+### 方式二：本机构建
 
 ### 环境要求
 
