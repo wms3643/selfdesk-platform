@@ -69,7 +69,13 @@
             display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px;
             font-size: 11.5px; color: var(--ink-3); letter-spacing: .02em;
         }
-        .hint { margin-top: 18px; font-size: 12px; color: var(--ink-3); }
+        .hint { margin-top: 18px; font-size: 12px; color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+        .hint .cred { color: var(--ink-2); }
+        .hint code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11.5px; background: #fff; border: 1px solid var(--line);
+            border-radius: 5px; padding: 1px 6px; color: var(--primary);
+        }
         @media (max-width: 760px) {
             body { padding: 32px 18px; }
             h1 { font-size: 26px; }
@@ -146,7 +152,10 @@
         </div>
     </div>
 
-    <p class="hint">演示环境已开启本机免密：打开管理后台会直接进入，不需要输入账号密码。</p>
+    <div class="hint">
+        <span>演示环境已开启免密：打开管理后台会自动进入，不需要输入账号密码。</span>
+        <span class="cred">手动登录用 <code>admin@email.com</code> / <code>SelfDesk#2026</code></span>
+    </div>
 
     <footer>
         <span>JAVA 21 · SPRING BOOT · SPRING AI · LANGGRAPH · POSTGRESQL · ELASTICSEARCH</span>

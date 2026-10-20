@@ -133,6 +133,18 @@ docker compose up -d
 
 关闭后走正常登录页，账号 `admin@email.com`，密码为首次建库时的 `BYTEDESK_ADMIN_PASSWORD`（默认 `SelfDesk#2026`）。
 
+### 默认账号
+
+| 入口 | 账号 | 密码 | 说明 |
+|---|---|---|---|
+| 管理后台 `/admin` | `admin@email.com` | `SelfDesk#2026` | 演示免密会自动填入；手动登录用这组 |
+| 客服工作台 `/console/` | —— | —— | 演示模式自动以 `SuperAdmin` 进入 |
+| 访客端 `/chat/` | —— | —— | 无需登录，直接对话 |
+| 运营仪表盘 `:8002` | —— | —— | 只读，绑定本机 |
+
+密码来自 `.env` 里的 `BYTEDESK_ADMIN_PASSWORD`（缺省 `SelfDesk#2026`），**只在首次建库时写入**。
+想改密码：改 `.env` 后 `docker compose down -v` 重新初始化（会清空演示数据），或直接 UPDATE 数据库里的 `bytedesk_core_user.password`。
+
 数据落在三个命名卷里（`esdata` 索引、`pgdata` 业务库、`appdata` 上传文件），`docker compose down` 不会丢；
 要清空用 `docker compose down -v`。
 
