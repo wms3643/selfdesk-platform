@@ -122,6 +122,9 @@ docker compose up -d --build
 数据落在两个命名卷里（`esdata` 索引、`appdata` H2 业务库），`docker compose down` 不会丢；
 要清空用 `docker compose down -v`。
 
+compose 里已把数据库切成内置 H2（默认 profile 走 MySQL），并开启了演示模式（免验证码）；
+要接 MySQL/PostgreSQL，把 `BYTEDESK_DATASOURCE_ACTIVE` 与 `SPRING_DATASOURCE_*` 换成对应值即可。
+
 ### 方式二：本机构建
 
 ### 环境要求

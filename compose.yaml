@@ -37,6 +37,13 @@ services:
       SPRING_AI_DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       SPRING_AI_DEEPSEEK_CHAT_OPTIONS_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       BYTEDESK_ADMIN_PASSWORD: ${BYTEDESK_ADMIN_PASSWORD:-SelfDesk#2026}
+      # 默认 open profile 走 MySQL，这里切到内置 H2 并落到数据卷
+      BYTEDESK_DATASOURCE_ACTIVE: h2
+      SPRING_DATASOURCE_URL: jdbc:h2:file:/app/data/h2db/selfdesk
+      # 演示模式：关闭验证码、开启演示订单接口
+      BYTEDESK_TESTING_ENABLED: "true"
+      BYTEDESK_TESTING_DISABLE_CAPTCHA: "true"
+      BYTEDESK_DEMO_ORDER_API_ENABLED: "true"
       JAVA_OPTS: ${JAVA_OPTS:--Xms512m -Xmx1280m}
     ports:
       - "9003:9003"
