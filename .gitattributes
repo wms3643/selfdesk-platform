@@ -1,1 +1,5 @@
 
+
+# Maven wrapper: 保持 LF 与可执行位
+mvnw text eol=lf
+mvnw.cmd text eol=crlf

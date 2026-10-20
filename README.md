@@ -88,6 +88,17 @@ AI 侧提供两套可切换实现：**Spring AI 直连**（单进程）与 **Pyt
 | 前端 | Ant Design（管理后台）、原生 HTML/CSS/JS（工作台与看板） |
 | 构建 | Maven 多模块，产物为单一 fat jar |
 
+## 依赖清单
+
+| 类别 | 依赖 | 版本 | 是否必需 |
+|---|---|---|---|
+| 运行时 | JDK | 21 | 必需 |
+| 构建 | Maven（内置 wrapper `mvnw` / `mvnw.cmd`） | 3.9.9 | 必需 |
+| 检索 | Elasticsearch | 8.x | 必需（知识库与向量检索） |
+| 缓存 | Redis | 7.x | 可选（`bytedesk.cache.level=0` 时不需要） |
+| 数据库 | H2 / MySQL / PostgreSQL | — | 至少一个，默认 H2 |
+| 部署脚本 | Python | 3.10+ | 可选（`pip install -r deploy-selfdesk/requirements.txt`） |
+
 ## 快速开始
 
 ### 环境要求
@@ -102,10 +113,13 @@ AI 侧提供两套可切换实现：**Spring AI 直连**（单进程）与 **Pyt
 ### 1. 构建
 
 ```bash
-mvn -DskipTests -pl starter -am package
+# Windows
+.\mvnw.cmd -DskipTests -pl starter -am package
+# macOS / Linux
+./mvnw -DskipTests -pl starter -am package
 ```
 
-产物：`starter/target/bytedesk-starter.jar`
+产物：`starter/target/bytedesk-starter.jar`。首次执行 wrapper 会下载 Maven 3.9.9（约 9 MB），之后走本地缓存。
 
 ### 2. 启动依赖
 
@@ -244,7 +258,7 @@ docs/                   架构与部署文档
 - 前端部分页面为预构建产物，二次开发需改 `frontend/` 后重新构建
 - 文档以中文为主，英文文档在补充中
 - 示例视频使用 Git LFS，本仓库未包含这些媒体文件（不影响功能）
-- 未附带 `mvnw`，构建请使用本机 Maven 3.9+
+- `mvnw` 首次运行需要访问 Maven 仓库下载分发包；离线环境请预装 Maven 3.9+ 并设置 `MAVEN_HOME`
 
 ## 许可
 

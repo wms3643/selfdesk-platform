@@ -1,0 +1,4 @@
+# 部署与运营层依赖（不含业务工程）
+fastembed>=0.4        # 本地向量服务 embedding_server.py
+fastapi>=0.110        # 向量服务 HTTP 接口
+uvicorn>=0.27         # 向量服务 ASGI 运行时
