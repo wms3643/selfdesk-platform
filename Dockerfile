@@ -1,10 +1,11 @@
+# syntax=docker/dockerfile:1
 # 多阶段构建：先编译 24 个模块，再打运行时镜像
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /src
 
 # 根 pom 依赖 channels / modules / plugins / starter 四个目录，必须全带上
 COPY . .
-RUN mvn -B -q -DskipTests -pl starter -am package
+RUN --mount=type=cache,target=/root/.m2 mvn -B -q -DskipTests -pl starter -am package
 
 FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
