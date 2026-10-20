@@ -6,7 +6,7 @@
 ![spring](https://img.shields.io/badge/Spring%20Boot-4.x-0E7A68)
 
 一套完整可部署的企业级智能客服系统：多渠道接入、坐席协同、知识库与 RAG、工单与 CRM、AI 机器人与人工协同。
-在开源项目 [bytedesk](https://github.com/Bytedesk/bytedesk) 的基础上做了业务定制、界面重做与 AI 链路改造，源码完整开放，可直接构建运行。
+SelfDesk 是一套面向在线客服场景的智能客服平台：多渠道接入、坐席协同、知识库 RAG、工单与 CRM、AI 机器人与人工协同。源码完整开放，可直接构建运行。
 
 | 规模 | |
 |---|---|
@@ -25,7 +25,7 @@
 - [快速开始](#快速开始)
 - [配置](#配置)
 - [AI 链路](#ai-链路)
-- [界面定制层](#界面定制层)
+- [界面与运营层](#界面与运营层)
 - [目录结构](#目录结构)
 - [构建与部署](#构建与部署)
 - [工程与质量](#工程与质量)
@@ -96,7 +96,7 @@
 | JDK | 21 | 必须 |
 | Maven | 3.9+ | 构建 |
 | Docker | 任意近期版本 | 跑 Elasticsearch（检索与向量库） |
-| Python | 3.10+ | 仅定制层脚本与本地向量服务需要 |
+| Python | 3.10+ | 仅部署脚本与本地向量服务需要 |
 
 ### 1. 构建
 
@@ -152,7 +152,7 @@ cd deploy-selfdesk
 | `SPRING_ELASTICSEARCH_URIS` | 检索地址 | `http://localhost:19200` |
 | `SPRING_AI_DEEPSEEK_API_KEY` | 模型密钥 | — |
 | `SPRING_AI_DEEPSEEK_CHAT_OPTIONS_MODEL` | 模型名 | `deepseek-chat` |
-| `SPRING_AI_DEEPSEEK_BASE_URL` | 模型上游（可指向本地编排层） | `https://api.deepseek.com` |
+| `SPRING_AI_DEEPSEEK_BASE_URL` | 模型地址（可指向本地编排层） | `https://api.deepseek.com` |
 | `SPRING_AI_VECTORSTORE_TYPE` | 向量库类型 | `elasticsearch` |
 | `BYTEDESK_CACHE_LEVEL` | 0 关闭缓存 / 1 Caffeine / 2 +Redis | `0` |
 
@@ -182,9 +182,9 @@ AI 侧具备：
 - **意图与分流**：政策类问题走知识库，业务类走工具，识别到人工诉求转坐席
 - **可观测**：模型调用、token 用量、响应耗时写入日志与仪表盘
 
-## 界面定制层
+## 界面与运营层
 
-`deploy-selfdesk/` 是本仓库对上游的改造部分，**不改 Java 业务代码**，只替换静态资源：
+`deploy-selfdesk/` 负责界面与部署，**不改 Java 业务代码**，只替换静态资源：
 
 | 目录 | 内容 |
 |---|---|
@@ -212,9 +212,9 @@ modules/                24 个业务模块（独立 pom）
   ...
 starter/                唯一可执行入口（配置 + 静态资源）
 frontend/               前端源码（构建产物已放入 starter/static）
-deploy/                 上游的 Docker / K8s / FreeSWITCH 部署样例
-deploy-selfdesk/        本项目的界面与部署定制层
-docs/                   架构、部署、上游文档
+deploy/                 Docker / K8s / FreeSWITCH 部署样例
+deploy-selfdesk/        界面与部署脚本
+docs/                   架构与部署文档
 ```
 
 ## 构建与部署
@@ -232,7 +232,7 @@ docs/                   架构、部署、上游文档
 - **多模块边界**：每个模块自带 `pom.xml`、`application.properties`、Controller，依赖方向单向（module → core）
 - **配置外置**：环境变量优先，配置文件按主题拆分（`properties/open/*`）
 - **CI**：静态检查（脚本语法、密钥扫描、敏感文件、配置占位符、README 图片引用）
-- **测试**：定制层有 pytest 用例（补丁幂等、注入边界）；业务模块使用上游测试集
+- **测试**：界面与部署层有 pytest 用例（补丁幂等、注入边界）；业务模块沿用内置测试集
 - **数据安全**：仓库内所有默认口令为 `change-me`，真实密钥不落库
 
 ## 已知限制
@@ -240,13 +240,13 @@ docs/                   架构、部署、上游文档
 - 单体部署：默认一个 jar，模块化但非微服务；超大并发场景需按模块拆分
 - 默认 H2 适合单机演示与小规模；生产建议 MySQL/PostgreSQL
 - 向量检索依赖 Elasticsearch；未部署时知识库不可用（不影响会话）
-- 前端部分页面为上游预构建产物，二次开发需改 `frontend/` 后重新构建
+- 前端部分页面为预构建产物，二次开发需改 `frontend/` 后重新构建
 - 文档以中文为主，英文文档在补充中
-- 上游示例视频使用 Git LFS，本仓库未包含这些媒体文件（不影响功能）
-- 未附带 `mvnw`（上游同样用 LFS 存 wrapper），构建请使用本机 Maven 3.9+
+- 示例视频使用 Git LFS，本仓库未包含这些媒体文件（不影响功能）
+- 未附带 `mvnw`，构建请使用本机 Maven 3.9+
 
-## 许可与致谢
+## 许可
 
-本项目基于 [bytedesk](https://github.com/Bytedesk/bytedesk)（**AGPL-3.0**）修改，遵循同一许可发布。
-上游版权归其作者所有；本仓库的修改包括：界面定制层、AI 链路改造、部署脚本、配置清理（口令占位符化）。
-二次分发或提供网络服务时，请遵守 AGPL-3.0 的源码开放要求。详见 [NOTICE.md](NOTICE.md)。
+本项目以 **AGPL-3.0** 发布，许可全文见 [LICENSE](LICENSE)。
+第三方组件、版权归属与修改记录见 [NOTICE.md](NOTICE.md)。
+对外提供网络服务时，请遵守 AGPL-3.0 关于源码开放的要求。
