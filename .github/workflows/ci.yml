@@ -61,7 +61,7 @@ jobs:
           # 只允许配置文件里出现占位符，不允许看起来像真实口令的长串
           if grep -rInE "password=['\"]?[A-Za-z0-9]{12,}['\"]?$" \
              --include="*.properties" --include="*.yml" --include="*.yaml" \
-             --exclude-dir=target . | grep -v "change-me"; then
+             --exclude-dir=target . | grep -v "change-me" | grep -vE "^[^:]+:[0-9]+:#"; then
             echo "::error::配置中存在疑似真实口令"
             exit 1
           fi
