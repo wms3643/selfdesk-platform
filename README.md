@@ -1,6 +1,6 @@
 # SelfDesk 智能客服平台
 
-![ci](https://github.com/wms3643/bytedesk-selfdesk/actions/workflows/ci.yml/badge.svg)
+![ci](https://github.com/wms3643/selfdesk-platform/actions/workflows/ci.yml/badge.svg)
 ![license](https://img.shields.io/badge/license-AGPL--3.0-0E7A68)
 ![java](https://img.shields.io/badge/Java-21-0E7A68)
 ![spring](https://img.shields.io/badge/Spring%20Boot-4.x-0E7A68)
