@@ -22,7 +22,7 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 JAR = pathlib.Path(
     os.environ.get("SELFDESK_JAR")
-    or str(ROOT.parent / "bytedesk" / "starter" / "target" / "bytedesk-starter.jar")
+    or str(ROOT.parent / "starter" / "target" / "bytedesk-starter.jar")
 )
 PREFIX = "BOOT-INF/classes/static/"
 ADMIN_INDEX = PREFIX + "admin/index.html"
@@ -42,17 +42,39 @@ INJECT = '<script src="/selfdesk-brand.js" defer></script>'
 
 
 def autologin_prefix() -> str:
-    """本地私有文件存在时才注入凭据；仓库里永远没有明文。"""
+    """注入免密配置。
+
+    优先级：
+    1. 本地 `.selfdesk-autologin.json`（已 gitignore，仓库里永远没有明文）
+    2. 演示模式（默认开启）：用 SELFDESK_DEMO_USERNAME / SELFDESK_DEMO_PASSWORD，
+       与容器里的 BYTEDESK_ADMIN_PASSWORD 保持一致
+    3. SELFDESK_DEMO_AUTOLOGIN=0 关闭，回到正常登录页
+    """
     cfg_file = ROOT / ".selfdesk-autologin.json"
-    if not cfg_file.exists():
+    if cfg_file.exists():
+        try:
+            cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise SystemExit(f".selfdesk-autologin.json 解析失败：{exc}")
+        if not cfg.get("username") or not cfg.get("password"):
+            raise SystemExit(".selfdesk-autologin.json 需要 username 与 password")
+        print("  · 检测到 .selfdesk-autologin.json，将注入本机免密配置")
+        return "window.__SELFDESK_AUTOLOGIN__=" + json.dumps(cfg, ensure_ascii=False) + ";\n"
+
+    demo = os.environ.get("SELFDESK_DEMO_AUTOLOGIN", "1").strip().lower()
+    if demo in ("0", "false", "off", "no"):
+        print("  · 演示免密已关闭（SELFDESK_DEMO_AUTOLOGIN=0），保留正常登录页")
         return ""
-    try:
-        cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        raise SystemExit(f".selfdesk-autologin.json 解析失败：{exc}")
-    if not cfg.get("username") or not cfg.get("password"):
-        raise SystemExit(".selfdesk-autologin.json 需要 username 与 password")
-    print("  · 检测到 .selfdesk-autologin.json，将注入本机免密配置")
+
+    cfg = {
+        "username": os.environ.get("SELFDESK_DEMO_USERNAME", "admin@email.com"),
+        "password": os.environ.get("SELFDESK_DEMO_PASSWORD", "SelfDesk#2026"),
+    }
+    print(
+        "  · 演示免密已启用："
+        + cfg["username"]
+        + "（设 SELFDESK_DEMO_AUTOLOGIN=0 可关闭）"
+    )
     return "window.__SELFDESK_AUTOLOGIN__=" + json.dumps(cfg, ensure_ascii=False) + ";\n"
 
 

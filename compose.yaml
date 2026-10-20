@@ -46,6 +46,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # 演示免密：默认开启，账号密码与下面的 BYTEDESK_ADMIN_PASSWORD 保持一致
+        SELFDESK_DEMO_AUTOLOGIN: ${SELFDESK_DEMO_AUTOLOGIN:-1}
+        SELFDESK_DEMO_PASSWORD: ${BYTEDESK_ADMIN_PASSWORD:-SelfDesk#2026}
     container_name: selfdesk-app
     depends_on:
       elasticsearch:

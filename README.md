@@ -113,11 +113,23 @@ docker compose up -d --build
 
 首次构建会编译 24 个模块，约 10 分钟（之后有缓存）。启动后：
 
-| 入口 | 地址 |
-|---|---|
-| 访客端 | http://localhost:9003/chat/ |
-| 客服工作台 | http://localhost:9003/console/ |
-| 管理后台 | http://localhost:9003/admin |
+| 入口 | 地址 | 是否需要登录 |
+|---|---|---|
+| 访客端 | http://localhost:9003/chat/ | 不需要 |
+| 客服工作台 | http://localhost:9003/console/ | 不需要（本机免密） |
+| 管理后台 | http://localhost:9003/admin | 不需要，打开即进入 |
+
+**管理后台默认免登录**：演示账号 `admin@email.com` / `SelfDesk#2026` 会在页面加载时自动填入并提交，
+所以克隆下来直接点 `/admin` 就能看到完整后台，不用猜密码。
+
+需要正式的登录流程时，构建时关掉即可：
+
+```bash
+docker compose build --build-arg SELFDESK_DEMO_AUTOLOGIN=0
+docker compose up -d
+```
+
+关闭后走正常登录页，账号 `admin@email.com`，密码为首次建库时的 `BYTEDESK_ADMIN_PASSWORD`（默认 `SelfDesk#2026`）。
 
 数据落在三个命名卷里（`esdata` 索引、`pgdata` 业务库、`appdata` 上传文件），`docker compose down` 不会丢；
 要清空用 `docker compose down -v`。
@@ -288,6 +300,7 @@ docs/                   架构与部署文档
 - 文档以中文为主，英文文档在补充中
 - 示例视频使用 Git LFS，本仓库未包含这些媒体文件（不影响功能）
 - `mvnw` 首次运行需要访问 Maven 仓库下载分发包；离线环境请预装 Maven 3.9+ 并设置 `MAVEN_HOME`
+- 默认开启**演示免密**（后台自动登录），仅用于本地演示；对外部署请用 `--build-arg SELFDESK_DEMO_AUTOLOGIN=0` 重新构建
 
 ## 许可
 

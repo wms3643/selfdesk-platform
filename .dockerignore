@@ -5,7 +5,7 @@ node_modules
 images
 jmeter
 docs
-deploy
+/deploy
 .github
 *.jar
 *.log
