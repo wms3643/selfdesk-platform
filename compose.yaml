@@ -23,6 +23,25 @@ services:
       retries: 30
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: selfdesk-pg
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bytedesk}
+      POSTGRES_USER: ${POSTGRES_USER:-bytedesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bytedesk_local}
+      TZ: Asia/Shanghai
+    ports:
+      - "15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bytedesk} -d ${POSTGRES_DB:-bytedesk}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -31,15 +50,21 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: open
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       SPRING_AI_DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       SPRING_AI_DEEPSEEK_CHAT_OPTIONS_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       BYTEDESK_ADMIN_PASSWORD: ${BYTEDESK_ADMIN_PASSWORD:-SelfDesk#2026}
-      # 默认 open profile 走 MySQL，这里切到内置 H2 并落到数据卷
-      BYTEDESK_DATASOURCE_ACTIVE: h2
-      SPRING_DATASOURCE_URL: jdbc:h2:file:/app/data/h2db/selfdesk
+      # 业务库：PostgreSQL（表结构由 JPA 自动创建）
+      BYTEDESK_DATASOURCE_ACTIVE: postgresql
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-bytedesk}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-bytedesk}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-bytedesk_local}
+      # 管理员初始密码只在首次建库时生效
+      # BYTEDESK_ADMIN_PASSWORD 已在下方设置
       # 演示模式：关闭验证码、开启演示订单接口
       BYTEDESK_TESTING_ENABLED: "true"
       BYTEDESK_TESTING_DISABLE_CAPTCHA: "true"
@@ -54,3 +79,4 @@ services:
 volumes:
   esdata:
   appdata:
+  pgdata:

@@ -66,7 +66,7 @@ AI 侧提供两套可切换实现：**Spring AI 直连**（单进程）与 **Pyt
                      │  └─────────────────────────┘  │
                      └───┬───────────┬───────────┬───┘
                          │           │           │
-                   H2/MySQL/PG   Elasticsearch  Redis
+                  PostgreSQL   Elasticsearch  Redis
                    （业务数据）   （检索+向量）   （缓存/流）
                          │
                          ▼
@@ -81,7 +81,7 @@ AI 侧提供两套可切换实现：**Spring AI 直连**（单进程）与 **Pyt
 | 层 | 选型 |
 |---|---|
 | 运行时 | Java 21、Spring Boot 4.x、Spring AI |
-| 数据 | H2（默认，零依赖）/ MySQL / PostgreSQL / Oracle / 达梦 / 人大金仓 |
+| 数据 | **PostgreSQL（默认）** / MySQL / H2（单机演示）/ Oracle / 达梦 / 人大金仓 |
 | 检索 | Elasticsearch（全文 + 向量），可切换 pgvector |
 | 缓存与消息 | Redis（可选，`bytedesk.cache.level=0` 时不需要） |
 | 实时通道 | WebSocket / STOMP |
@@ -97,7 +97,7 @@ AI 侧提供两套可切换实现：**Spring AI 直连**（单进程）与 **Pyt
 | 构建 | Maven（内置 wrapper `mvnw` / `mvnw.cmd`） | 3.9.9 | 方式二必需 |
 | 检索 | Elasticsearch | 8.x | 必需（Docker 方式自动拉起） |
 | 缓存 | Redis | 7.x | 可选（`bytedesk.cache.level=0` 时不需要） |
-| 数据库 | H2 / MySQL / PostgreSQL | — | 至少一个，默认 H2 |
+| 数据库 | **PostgreSQL 16**（compose 自带） | 16 | 必需（也可切 MySQL / H2） |
 | 部署脚本 | Python | 3.10+ | 可选（`pip install -r deploy-selfdesk/requirements.txt`） |
 
 ## 快速开始
@@ -119,10 +119,11 @@ docker compose up -d --build
 | 客服工作台 | http://localhost:9003/console/ |
 | 管理后台 | http://localhost:9003/admin |
 
-数据落在两个命名卷里（`esdata` 索引、`appdata` H2 业务库），`docker compose down` 不会丢；
+数据落在三个命名卷里（`esdata` 索引、`pgdata` 业务库、`appdata` 上传文件），`docker compose down` 不会丢；
 要清空用 `docker compose down -v`。
 
-compose 里已把数据库切成内置 H2（默认 profile 走 MySQL），并开启了演示模式（免验证码）；
+compose 自带 PostgreSQL 16 并设为默认业务库（表结构由 JPA 自动创建，首次启动约 40 秒建完）；
+同时开启了演示模式（免验证码）；
 要接 MySQL/PostgreSQL，把 `BYTEDESK_DATASOURCE_ACTIVE` 与 `SPRING_DATASOURCE_*` 换成对应值即可。
 
 ### 方式二：本机构建
@@ -160,7 +161,8 @@ docker compose up -d          # Elasticsearch 8.x
 java -jar starter/target/bytedesk-starter.jar --spring.profiles.active=open
 ```
 
-默认使用 H2 文件库，数据落在 `./data`，无需额外数据库。
+默认使用 PostgreSQL（`bytedesk` 库），表结构在首次启动时由 JPA 自动创建。
+若想零依赖跑单机演示，可把数据源切到 H2 文件库（`--bytedesk.datasource.active=h2`）。
 
 打开：
 
@@ -171,7 +173,8 @@ java -jar starter/target/bytedesk-starter.jar --spring.profiles.active=open
 | 管理后台 | http://localhost:9003/admin |
 | 坐席移动端 | http://localhost:9003/agent/ |
 
-初始管理员：`admin@email.com`，密码以首次启动日志输出为准（或通过 `BYTEDESK_ADMIN_PASSWORD` 指定）。
+初始管理员：`admin@email.com`。密码在**首次建库时**由 `BYTEDESK_ADMIN_PASSWORD` 决定（缺省为 `bytedesk.admin.password` 配置值）；
+库已存在后再改环境变量不会改密码。
 
 ### 4. 可选：一键脚本（Windows）
 
@@ -189,7 +192,7 @@ cd deploy-selfdesk
 | 变量 | 作用 | 默认 |
 |---|---|---|
 | `SPRING_PROFILES_ACTIVE` | 运行模式 | `open` |
-| `BYTEDESK_DATASOURCE_ACTIVE` | 数据库类型 | `h2` |
+| `BYTEDESK_DATASOURCE_ACTIVE` | 数据库类型 | `postgresql` |
 | `SPRING_ELASTICSEARCH_URIS` | 检索地址 | `http://localhost:19200` |
 | `SPRING_AI_DEEPSEEK_API_KEY` | 模型密钥 | — |
 | `SPRING_AI_DEEPSEEK_CHAT_OPTIONS_MODEL` | 模型名 | `deepseek-chat` |
@@ -197,7 +200,7 @@ cd deploy-selfdesk
 | `SPRING_AI_VECTORSTORE_TYPE` | 向量库类型 | `elasticsearch` |
 | `BYTEDESK_CACHE_LEVEL` | 0 关闭缓存 / 1 Caffeine / 2 +Redis | `0` |
 
-数据库切换：`bytedesk.datasource.active=h2|mysql|postgresql|oracle|kingbase`，
+数据库切换：`bytedesk.datasource.active=postgresql|mysql|h2|oracle|kingbase`，
 对应连接串在 `starter/src/main/resources/properties/open/datasource/` 下，**默认密码均为占位符 `change-me`，上线前必须改**。
 
 ## AI 链路
@@ -209,7 +212,7 @@ cd deploy-selfdesk
 | 实现 | Spring AI + DeepSeek | Java 业务 + Python LangGraph 编排 |
 | 进程 | 1 个 | 2 个（9003 + 8003） |
 | 切换 | `SPRING_AI_DEEPSEEK_BASE_URL` 指向本地 OpenAI 兼容端点即可 | 同左 |
-| 会话状态 | H2 | 业务在 H2，AI 状态在 PostgreSQL |
+| 会话状态 | PostgreSQL | 业务在 PostgreSQL，AI 状态也在 PostgreSQL（不同库） |
 
 版本 B 的 AI 层单独开源：[selfdesk-langgraph](https://github.com/wms3643/selfdesk-langgraph)，
 提供意图分流、RAG、工具调用、两阶段写操作与转人工挂起；本仓库的 `deploy-selfdesk/scripts/ai-gateway.ps1`
@@ -266,7 +269,7 @@ docs/                   架构与部署文档
 | 生产 jar | `mvn -DskipTests -pl starter -am package` |
 | 容器 | 参考 `deploy/docker/one/docker-compose.yaml` |
 | K8s | 参考 `deploy/k8s/`（含 secret 样例） |
-| 数据库 | 默认 H2；切换 MySQL/PG 只需改 `bytedesk.datasource.active` 与连接串 |
+| 数据库 | 默认 PostgreSQL；切换 MySQL/H2 只需改 `bytedesk.datasource.active` 与连接串 |
 
 ## 工程与质量
 
@@ -279,7 +282,7 @@ docs/                   架构与部署文档
 ## 已知限制
 
 - 单体部署：默认一个 jar，模块化但非微服务；超大并发场景需按模块拆分
-- 默认 H2 适合单机演示与小规模；生产建议 MySQL/PostgreSQL
+- 默认 PostgreSQL 适合单机与中小规模；高并发或多实例部署请自行加连接池、读写分离与备份策略
 - 向量检索依赖 Elasticsearch；未部署时知识库不可用（不影响会话）
 - 前端部分页面为预构建产物，二次开发需改 `frontend/` 后重新构建
 - 文档以中文为主，英文文档在补充中

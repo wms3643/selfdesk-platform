@@ -21,6 +21,7 @@ def health():
 
 
 @app.post("/v1/embeddings")
+@app.post("/embeddings")  # OpenAI 官方路径；Spring AI 默认带 /v1，部分客户端不带
 def embeddings(request: EmbeddingRequest):
     texts = [request.input] if isinstance(request.input, str) else request.input
     vectors = [vector.tolist() for vector in model.embed(texts)]
